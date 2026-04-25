@@ -264,8 +264,12 @@ class ParkourAgent(OnboardAgent):
         return self.xyyaw_command
 
     def _get_joint_vel_rel_obs(self):
-        """Return shape: (num_joints,)"""
-        return self.ros_node.joint_vel_
+        """Return shape: (num_non_head_joints,) = (29,)
+        Simulation's joint_vel uses NON_HEAD_JOINT_REGEX which excludes head_yaw_joint
+        and head_pitch_joint. The policy was trained with 29-dim velocity observations.
+        We return only the non-head joint velocities to match the training setup.
+        """
+        return self.ros_node.joint_vel_[:29]  # shape (29,)
 
     def _get_last_action_obs(self):
         """Return shape: (num_active_joints,)"""
