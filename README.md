@@ -27,7 +27,7 @@ pip install -e instinct_onboard_gimbal/
 
 ## 启动方式
 
-### Dry-run 模式（不连接真机、不连舵机）
+### Dry-run 模式
 
 ```bash
 python scripts/g1_parkour.py \
