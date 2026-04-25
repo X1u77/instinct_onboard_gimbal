@@ -74,11 +74,11 @@ python scripts/g1_parkour.py \
 ```
 上电 / 启动
     ↓
-ColdStart（自动）→ 机器人移动到初始姿态
+ColdStart
     ↓
-按 R1 → Stand Agent（站立平衡）
+按 R1 → Stand Agent
     ↓
-按 L1 → Parkour Agent（深度感知自主跑酷）
+按 L1 → Parkour Agent
     ↓
 按 R1 → 回到 Stand
 ```
