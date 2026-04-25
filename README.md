@@ -82,21 +82,3 @@ ColdStart（自动）→ 机器人移动到初始姿态
     ↓
 按 R1 → 回到 Stand
 ```
-
-## 安全机制
-
-- **R2 / L2 按住**：紧急停机（所有电机断电 + 云台释放）
-- **关节限位保护**：`joint_pos_protect_ratio=2.0`，超限自动停机
-- **NaN 检查**：action 含 NaN 时跳过发送
-- **扭矩限幅**：`clip_by_torque_limit` 防止输出扭矩过大
-- **云台限位**：pan ±90°、tilt ±45°
-
-## 坐标系转换
-
-**读取**：`sim_pos = real_q * joint_signs`
-
-**写入**：`real_q = target_pos * joint_signs`
-
-**云台**：
-- 读取：`(servo_deg * 0.1) * joint_signs` → 弧度
-- 写入：`sim_rad * joint_signs` → 舵机度
