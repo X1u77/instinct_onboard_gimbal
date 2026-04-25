@@ -1,53 +1,9 @@
-# G1 Parkour 真机部署
+# G1 Parkour
 
 在 Unitree G1 机器人上运行 31-DOF 跑酷策略模型，支持 RealSense D435 深度相机感知和头部云台 UART 舵机控制。
 
-## 目录结构
-
-```
-instinct_onboard_gimbal/
-├── crc_module.py              # Unitree LowCmd CRC16-CCITT 校验
-├── instinct_onboard/
-│   ├── robot_cfgs.py         # G1_29Dof_TorsoBase / G1_31Dof_TorsoBase 配置
-│   ├── ros_nodes/
-│   │   ├── base.py           # RealNode 基类（扭矩限幅、NaN 检查、safety）
-│   │   ├── unitree.py        # UnitreeNode（LowState 读取 + LowCmd 发布 + 云台集成）
-│   │   └── realsense.py      # RealSense 相机（独立进程 + 共享内存）
-│   ├── agents/
-│   │   ├── base.py          # OnboardAgent 基类（ONNX 加载、观察量配置）
-│   │   └── parkour_agent.py # ParkourAgent / ParkourStandAgent
-│   └── servo/
-│       ├── controller.py      # GimbalController（UART 舵机控制，线程安全）
-│       ├── protocol.py        # 舵机通讯协议（Fashion Star 串口协议）
-│       └── gimbal_node.py
-└── scripts/
-    └── g1_parkour.py         # 主入口节点
-```
-
-## 关键设计决策
-
-### 关节映射（joint_map）
-
-31-DOF 配置中，`joint_map` 将仿真关节顺序映射到 Unitree LowState 电机索引：
-
-| 关节 | 仿真索引 | Unitree 电机索引 | 控制方式 |
-|------|---------|----------------|---------|
-| 29 个非头部关节 | 0–28 | 0–28 | Unitree SDK |
-| head_yaw | 29 | -1 | UART 舵机 |
-| head_pitch | 30 | -1 | UART 舵机 |
-
-### 云台坐标系
-
 仿真中 `head_yaw` 正方向 = 云台左转，UART 舵机正方向 = 云台右转，因此 `joint_signs[29] = -1`。`head_pitch` 方向一致，`joint_signs[30] = +1`。
 
-### 观察量维度
-
-| 观察量 | 维度 | 来源 |
-|--------|------|------|
-| `joint_pos_rel` | 31 | LowState + 云台反馈 |
-| `joint_vel_rel` | **29** | LowState（排除头部） |
-| `last_action` | 31 | action buffer |
-| `camera_yaw_pitch` | 16 | 云台当前角度 × 8历史 |
 
 ## 依赖
 
@@ -59,12 +15,11 @@ pip install -e instinct_onboard_gimbal/
 
 ## 模型准备
 
-每个模型目录下需包含：
 
 ```
 /path/to/model/
 ├── params/
-│   └── env.yaml          # 从仿真训练导出
+│   └── env.yaml          
 └── exported/
     ├── 0-depth_encoder.onnx
     └── actor.onnx
