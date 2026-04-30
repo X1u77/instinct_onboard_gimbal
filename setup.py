@@ -62,6 +62,7 @@ setup(
     name="instinct_onboard",
     version="0.1.0",
     packages=find_packages(exclude=["scripts", "tests"]),
+    py_modules=["crc_module"],
     install_requires=[
         "numpy",
         "numpy-quaternion",
@@ -73,6 +74,7 @@ setup(
         "empy==3.3.2",  # codespell:ignore
         "ros2_numpy",  # Required for ROS2 message handling, install from source: https://github.com/nitesh-subedi/ros2_numpy
         "pyrealsense2",
+        "pyserial",
     ],
     extras_require={
         "noopencv": [],  # No opencv dependencies

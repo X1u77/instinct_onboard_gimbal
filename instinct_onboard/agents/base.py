@@ -78,23 +78,60 @@ class OnboardAgent(ABC):
         for action_names, action_config in self.cfg["actions"].items():
             if not action_config["asset_name"] == "robot":
                 continue
-            for i in range(self.ros_node.NUM_JOINTS):
-                name = self.ros_node.sim_joint_names[i]
-                for _, joint_name_expr in enumerate(action_config["joint_names"]):
-                    if re.search(joint_name_expr, name):
-                        if isinstance(action_config["scale"], dict):
-                            for key, value in action_config["scale"].items():
-                                if re.search(key, name):
-                                    self._action_scale[i] = value
-                        else:
-                            self._action_scale[i] = action_config["scale"]
-                        # print("Joint {}({}) has action scale {}".format(i, name, self.action_scale[i]))
-                    if not action_config["use_default_offset"]:
-                        # not using articulation.default_joint_pos as default offset
-                        if isinstance(action_config["offset"], dict):
-                            self._action_offset[i] = action_config["offset"][joint_name_expr]
-                        else:
-                            self._action_offset[i] = action_config["offset"]
+
+            if "joint_names" in action_config:
+                self._parse_joint_position_action(action_config)
+            elif "yaw_joint_name" in action_config and "pitch_joint_name" in action_config:
+                self._parse_camera_yaw_pitch_action(action_config)
+            else:
+                raise ValueError(f"Unsupported action config '{action_names}': {action_config.keys()}")
+
+    def _parse_joint_position_action(self, action_config: dict):
+        """Parse IsaacLab JointPositionActionCfg-like entries."""
+        use_default_offset = action_config.get("use_default_offset", True)
+        offset = action_config.get("offset", 0.0)
+        scale = action_config.get("scale", 1.0)
+        for i, name in enumerate(self.ros_node.sim_joint_names):
+            for joint_name_expr in action_config["joint_names"]:
+                if not re.search(joint_name_expr, name):
+                    continue
+                self._action_scale[i] = self._get_config_value_for_joint(scale, name, joint_name_expr)
+                if not use_default_offset:
+                    self._action_offset[i] = self._get_config_value_for_joint(offset, name, joint_name_expr)
+
+    def _parse_camera_yaw_pitch_action(self, action_config: dict):
+        """Parse the custom CameraYawPitchActionCfg used by the parkour policy.
+
+        Simulation interprets these two raw actions as:
+            target = raw * scale + offset + default_joint_pos  (when use_default_offset=True)
+        RealNode.send_action uses the same algebra through action_scale/action_offset.
+        """
+        joint_names = [action_config["yaw_joint_name"], action_config["pitch_joint_name"]]
+        scale = action_config.get("scale", (1.0, 1.0))
+        offset = action_config.get("offset", (0.0, 0.0))
+        use_default_offset = action_config.get("use_default_offset", True)
+        for local_id, joint_name in enumerate(joint_names):
+            joint_id = self.ros_node.sim_joint_names.index(joint_name)
+            self._action_scale[joint_id] = self._get_sequence_or_scalar(scale, local_id)
+            action_offset = self._get_sequence_or_scalar(offset, local_id)
+            if use_default_offset:
+                action_offset += self.default_joint_pos[joint_id]
+            self._action_offset[joint_id] = action_offset
+
+    @staticmethod
+    def _get_sequence_or_scalar(value, index: int):
+        if isinstance(value, (list, tuple)):
+            return value[index]
+        return value
+
+    @staticmethod
+    def _get_config_value_for_joint(value, joint_name: str, fallback_key: str):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if re.search(key, joint_name):
+                    return item
+            return value[fallback_key]
+        return value
 
     def _parse_obs_config(self):
         """Parse, set attributes from config dict, initialize buffers to speed up the computation"""
@@ -278,7 +315,7 @@ class ColdStartAgent(OnboardAgent):
         self.startup_step_size = startup_step_size
         self.joint_target_pos = np.zeros(self.ros_node.NUM_JOINTS) if joint_target_pos is None else joint_target_pos
         self._action_scale = (
-            np.zeros(self.ros_node.NUM_JOINTS, dtype=np.float32) if action_scale is None else action_scale
+            np.ones(self.ros_node.NUM_JOINTS, dtype=np.float32) if action_scale is None else action_scale
         )
         self._action_offset = (
             np.ones(self.ros_node.NUM_JOINTS, dtype=np.float32) if action_offset is None else action_offset
@@ -304,7 +341,14 @@ class ColdStartAgent(OnboardAgent):
             self.ros_node._get_joint_pos_obs() + np.sign(dof_pos_err) * self.startup_step_size,
             self.joint_target_pos,
         )
-        actions = (dof_pos_target - self._action_offset) / self._action_scale
+        scale_nonzero = np.abs(self._action_scale) > 1e-8
+        actions = np.zeros(self.ros_node.NUM_ACTIONS, dtype=np.float32)
+        np.divide(
+            dof_pos_target - self._action_offset,
+            self._action_scale,
+            out=actions,
+            where=scale_nonzero,
+        )
 
         return actions, done
 

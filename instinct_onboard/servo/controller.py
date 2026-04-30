@@ -79,7 +79,7 @@ class ServoController:
         self._status_callbacks: List[Callable[[int, ServoStatus], None]] = []
 
         # 指令间隔 (ms)
-        self._cmd_interval_ms = 0.01  # 10ms
+        self._cmd_interval_ms = 10.0  # 10ms
 
     def connect(self) -> bool:
         try:
@@ -478,11 +478,14 @@ class GimbalController(ServoController):
         pan_degrees: float,
         tilt_degrees: float,
         speed_deg_s: Optional[float] = None,
-        sync: bool = True
+        sync: bool = True,
+        time_ms: Optional[int] = None,
     ) -> bool:
         """设置云台角度（基于速度控制）"""
         self._current_pan = pan_degrees
         self._current_tilt = tilt_degrees
+        if self.use_dryrun:
+            return True
         speed = speed_deg_s if speed_deg_s is not None else self.speed_deg_s
         return self.set_angles({
             self.pan_servo_id: pan_degrees,
@@ -496,6 +499,8 @@ class GimbalController(ServoController):
         return self.read_angle(self.tilt_servo_id, multi_turn)
 
     def get_gimbal_angles(self) -> Tuple[Optional[float], Optional[float]]:
+        if self.use_dryrun:
+            return self._current_pan, self._current_tilt
         return self.get_pan_angle(), self.get_tilt_angle()
 
     @property

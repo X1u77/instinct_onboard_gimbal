@@ -92,10 +92,11 @@ Example Usage:
             --standdir /path/to/stand/model \\
             --depth_vis --pointcloud_vis
 
-    Real robot control (disable dry run):
+    Real robot control with gimbal:
         python g1_parkour.py \\
             --logdir /path/to/parkour/model \\
             --standdir /path/to/stand/model \\
+            --gimbal --gimbal_port /dev/ttyUSB0 \\
             --nodryrun
 
     With custom velocity parameters:
@@ -117,7 +118,7 @@ Example Usage:
 Notes:
     - The script runs at 50Hz main loop frequency (20ms period)
     - RealSense camera is configured at 480x270 resolution, 60 FPS
-    - Robot configuration: G1_29Dof_TorsoBase (29 degrees of freedom)
+    - Robot configuration: G1_31Dof_TorsoBase (31 degrees of freedom, with head gimbal)
     - Joint position protection ratio: 2.0
     - Camera runs in a separate process for better performance
     - Velocity control parameters affect joystick/wireless controller responsiveness
@@ -231,8 +232,12 @@ def main(args):
         rs_fps=60,
         camera_individual_process=True,
         joint_pos_protect_ratio=2.0,
-        robot_class_name="G1_29Dof_TorsoBase",
+        robot_class_name="G1_31Dof_TorsoBase",
         dryrun=not args.nodryrun,
+        enable_gimbal=args.gimbal,
+        gimbal_serial_port=args.gimbal_port,
+        gimbal_pan_range=tuple(np.rad2deg([-1.6, 1.6])),
+        gimbal_tilt_range=tuple(np.rad2deg([0.5, 1.5])),
     )
 
     stand_agent = ParkourStandAgent(
@@ -346,6 +351,18 @@ if __name__ == "__main__":
         action="store_true",
         default=False,
         help="Run the node without dry run mode (default: False)",
+    )
+    parser.add_argument(
+        "--gimbal",
+        action="store_true",
+        default=False,
+        help="Enable gimbal control for head joints (default: False)",
+    )
+    parser.add_argument(
+        "--gimbal_port",
+        type=str,
+        default="/dev/ttyUSB0",
+        help="Serial port for gimbal servo (default: /dev/ttyUSB0)",
     )
     parser.add_argument(
         "--debug",
