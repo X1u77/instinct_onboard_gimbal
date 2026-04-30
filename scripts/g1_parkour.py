@@ -236,11 +236,8 @@ def main(args):
         dryrun=not args.nodryrun,
         enable_gimbal=args.gimbal,
         gimbal_serial_port=args.gimbal_port,
-<<<<<<< HEAD
         gimbal_pan_range=tuple(np.rad2deg([-1.6, 1.6])),
         gimbal_tilt_range=tuple(np.rad2deg([0.5, 1.5])),
-=======
->>>>>>> 17f938fb4c26a86fa10d2d00379403cbc700d554
     )
 
     stand_agent = ParkourStandAgent(
