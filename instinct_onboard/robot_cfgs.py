@@ -283,11 +283,24 @@ class G1_29Dof_TorsoBase:
 class G1_31Dof_TorsoBase:
     """G1 with 2 additional head gimbal joints (head_yaw, head_pitch) controlled by UART servos.
 
+<<<<<<< HEAD
     Joint order matches the simulation order documented in unitree_g1.py:
       [0-10]  shoulders / waist / elbows
       [11-28] legs / wrists interleaved in IsaacLab articulation order
       [29]    head_yaw   (UART servo, NOT in Unitree LowState)
       [30]    head_pitch (UART servo, NOT in Unitree LowState)
+=======
+    Joint order matches g1_31dof.urdf used in simulation training:
+      [0-11]  Left leg  (hip_pitch/roll/yaw, knee, ankle_pitch/roll)
+      [12-23] Right leg (hip_pitch/roll/yaw, knee, ankle_pitch/roll)
+      [24]    waist_yaw
+      [25]    waist_roll
+      [26]    waist_pitch
+      [27-32] Left arm  (shoulder_pitch/roll/yaw, elbow, wrist_roll/pitch/yaw)
+      [33-38] Right arm (shoulder_pitch/roll/yaw, elbow, wrist_roll/pitch/yaw)
+      [39]    head_yaw   (UART servo, NOT in Unitree LowState)
+      [40]    head_pitch (UART servo, NOT in Unitree LowState)
+>>>>>>> 17f938fb4c26a86fa10d2d00379403cbc700d554
 
     Coordinate system note for head joints:
       - head_yaw:  sim positive = turning left, real servo positive = turning right
@@ -298,7 +311,10 @@ class G1_31Dof_TorsoBase:
 
     NUM_JOINTS = 31
     NUM_ACTIONS = 31
+<<<<<<< HEAD
     head_default_joint_pos = np.array([0.0, 0.8726646259971648], dtype=np.float32)
+=======
+>>>>>>> 17f938fb4c26a86fa10d2d00379403cbc700d554
 
     # sim_index -> real Unitree motor index
     # -1 means controlled by UART servo, not Unitree LowState

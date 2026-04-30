@@ -40,12 +40,15 @@ class UnitreeNode(RealNode):
         self.gimbal_pan_range = gimbal_pan_range
         self.gimbal_tilt_range = gimbal_tilt_range
         self.gimbal = None
+<<<<<<< HEAD
         self._gimbal_lock = threading.Lock()
         self._gimbal_reader_stop = threading.Event()
         self._gimbal_reader_thread = None
         self._gimbal_joint_pos = np.zeros(2, dtype=np.float32)
         self._gimbal_joint_vel = np.zeros(2, dtype=np.float32)
         self._gimbal_last_read_time = 0.0
+=======
+>>>>>>> 17f938fb4c26a86fa10d2d00379403cbc700d554
         # ROS topic names
         self.low_state_topic = low_state_topic
         self.low_cmd_topic = (
@@ -162,6 +165,47 @@ class UnitreeNode(RealNode):
             self._gimbal_reader_thread.join(timeout=0.2)
             self._gimbal_reader_thread = None
 
+        # Initialize gimbal controller for 31-DOF with head joints
+        self._init_gimbal()
+
+    def _init_gimbal(self):
+        """Initialize the gimbal controller for head joints (only when enable_gimbal=True)."""
+        if not self.enable_gimbal:
+            return
+
+        if self.NUM_JOINTS != 31:
+            self.get_logger().warn(
+                f"enable_gimbal=True but NUM_JOINTS={self.NUM_JOINTS}. "
+                "Gimbal only works with 31-DOF. Ignoring gimbal initialization."
+            )
+            self.enable_gimbal = False
+            return
+
+        try:
+            from instinct_onboard.servo import GimbalController
+            self.gimbal = GimbalController(
+                serial_port=self.gimbal_serial_port,
+                pan_servo_id=self.gimbal_pan_servo_id,
+                tilt_servo_id=self.gimbal_tilt_servo_id,
+                pan_range=self.gimbal_pan_range,
+                tilt_range=self.gimbal_tilt_range,
+                use_dryrun=self.dryrun,
+            )
+            if not self.dryrun:
+                if self.gimbal.connect():
+                    self.get_logger().info(
+                        f"Gimbal connected on {self.gimbal_serial_port}, "
+                        f"pan servo={self.gimbal_pan_servo_id}, tilt servo={self.gimbal_tilt_servo_id}"
+                    )
+                else:
+                    self.get_logger().error(f"Failed to connect gimbal on {self.gimbal_serial_port}")
+                    self.gimbal = None
+            else:
+                self.get_logger().warn("Gimbal running in dryrun mode")
+        except Exception as e:
+            self.get_logger().error(f"Failed to initialize gimbal: {e}")
+            self.gimbal = None
+
     def start_ros_handlers(self):
         """After initializing the env and policy, register ros related callbacks and topics"""
         super().start_ros_handlers()
@@ -223,7 +267,11 @@ class UnitreeNode(RealNode):
                 self.joint_pos_[sim_idx] = self.low_state_buffer.motor_state[real_idx].q * self.joint_signs[sim_idx]
                 self.joint_vel_[sim_idx] = self.low_state_buffer.motor_state[real_idx].dq * self.joint_signs[sim_idx]
             else:
+<<<<<<< HEAD
                 # Head gimbal feedback is cached by the UART reader thread.
+=======
+                # Head gimbal joints controlled by UART servo
+>>>>>>> 17f938fb4c26a86fa10d2d00379403cbc700d554
                 self.joint_pos_[sim_idx], self.joint_vel_[sim_idx] = self._read_gimbal_joint(sim_idx)
 
         # automatic safety check for Unitree motors only
@@ -247,9 +295,33 @@ class UnitreeNode(RealNode):
         sim_idx 29 -> head_yaw, sim_idx 30 -> head_pitch.
         Returns (position, velocity) in simulation coordinate system.
         """
+<<<<<<< HEAD
         head_idx = sim_idx - 29
         with self._gimbal_lock:
             return float(self._gimbal_joint_pos[head_idx]), float(self._gimbal_joint_vel[head_idx])
+=======
+        if self.gimbal is None:
+            return 0.0, 0.0
+        try:
+            pan_deg, tilt_deg = self.gimbal.get_gimbal_angles()
+            if pan_deg is None or tilt_deg is None:
+                return 0.0, 0.0
+            pan_rad = np.deg2rad(pan_deg)
+            tilt_rad = np.deg2rad(tilt_deg)
+            # joint_signs handles direction conversion:
+            #   head_yaw (idx 29): sign=-1 (sim=left+, servo=right+)
+            #   head_pitch (idx 30): sign=+1 (same direction)
+            yaw_sign = self.joint_signs[29]  # -1
+            pitch_sign = self.joint_signs[30]  # +1
+            head_yaw_rad = pan_rad * yaw_sign
+            head_pitch_rad = tilt_rad * pitch_sign
+            if sim_idx == 29:
+                return head_yaw_rad, 0.0
+            else:
+                return head_pitch_rad, 0.0
+        except Exception:
+            return 0.0, 0.0
+>>>>>>> 17f938fb4c26a86fa10d2d00379403cbc700d554
 
     def _torso_imu_state_callback(self, msg):
         """store and handle torso imu data"""
@@ -345,6 +417,26 @@ class UnitreeNode(RealNode):
     ):
         """Publish the joint commands to the robot motors in robot coordinates system.
         robot_coordinates_action: shape (NUM_JOINTS,), in simulation order.
+<<<<<<< HEAD
+=======
+
+        For 31-DOF: joints 0-28 go to Unitree LowCmd, joints 29-30 go to gimbal servo.
+        """
+        # Unitree motors (sim_index 0-28)
+        for sim_idx in range(min(self.NUM_JOINTS, 29)):
+            real_idx = self.joint_map[sim_idx]
+            if real_idx >= 0:
+                if not self.dryrun:
+                    self.low_cmd_buffer.motor_cmd[real_idx].mode = self.turn_on_motor_mode[sim_idx]
+                self.low_cmd_buffer.motor_cmd[real_idx].q = (target_joint_pos[sim_idx] * self.joint_signs[sim_idx]).item()
+                self.low_cmd_buffer.motor_cmd[real_idx].dq = 0.0
+                self.low_cmd_buffer.motor_cmd[real_idx].tau = 0.0
+                self.low_cmd_buffer.motor_cmd[real_idx].kp = p_gains[sim_idx].item()
+                self.low_cmd_buffer.motor_cmd[real_idx].kd = d_gains[sim_idx].item()
+
+        # Head gimbal joints (sim_index 29-30)
+        self._publish_gimbal_cmd(target_joint_pos)
+>>>>>>> 17f938fb4c26a86fa10d2d00379403cbc700d554
 
         For 31-DOF: joints 0-28 go to Unitree LowCmd, joints 29-30 go to gimbal servo.
         """
@@ -374,6 +466,12 @@ class UnitreeNode(RealNode):
         """Send head joint commands to the gimbal servo controller.
         Converts simulation coordinates (radians) to servo coordinates (degrees).
         """
+<<<<<<< HEAD
+=======
+        if self.gimbal is None:
+            return
+
+>>>>>>> 17f938fb4c26a86fa10d2d00379403cbc700d554
         # head_yaw (sim_idx=29): sim radians -> servo degrees
         # joint_signs[29] = -1 (sim=left+ -> servo=right+)
         head_yaw_sim = target_joint_pos[29]
@@ -384,6 +482,7 @@ class UnitreeNode(RealNode):
         head_pitch_sim = target_joint_pos[30]
         head_pitch_servo_deg = np.rad2deg(head_pitch_sim) * self.joint_signs[30]
 
+<<<<<<< HEAD
         with self._gimbal_lock:
             self._gimbal_joint_pos[:] = [head_yaw_sim, head_pitch_sim]
             self._gimbal_joint_vel[:] = 0.0
@@ -391,6 +490,8 @@ class UnitreeNode(RealNode):
         if self.gimbal is None:
             return
 
+=======
+>>>>>>> 17f938fb4c26a86fa10d2d00379403cbc700d554
         try:
             self.gimbal.set_gimbal_angle(
                 pan_degrees=head_yaw_servo_deg,
@@ -413,6 +514,7 @@ class UnitreeNode(RealNode):
         self.low_cmd_publisher.publish(self.low_cmd_buffer)
         # Stop gimbal servos
         if self.gimbal is not None and not self.dryrun:
+<<<<<<< HEAD
             self._stop_gimbal_reader()
             self.gimbal.stop_all()
 
@@ -421,3 +523,6 @@ class UnitreeNode(RealNode):
         if self.gimbal is not None and not self.dryrun:
             self.gimbal.disconnect()
         super().destroy_node()
+=======
+            self.gimbal.stop_all()
+>>>>>>> 17f938fb4c26a86fa10d2d00379403cbc700d554

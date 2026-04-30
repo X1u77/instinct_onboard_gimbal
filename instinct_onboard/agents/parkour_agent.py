@@ -269,6 +269,7 @@ class ParkourAgent(OnboardAgent):
         and head_pitch_joint. The policy was trained with 29-dim velocity observations.
         We return only the non-head joint velocities to match the training setup.
         """
+<<<<<<< HEAD
         non_head_joint_ids = [
             i
             for i, joint_name in enumerate(self.ros_node.sim_joint_names)
@@ -281,6 +282,9 @@ class ParkourAgent(OnboardAgent):
         yaw_id = self.ros_node.sim_joint_names.index("head_yaw_joint")
         pitch_id = self.ros_node.sim_joint_names.index("head_pitch_joint")
         return self.ros_node.joint_pos_[[yaw_id, pitch_id]]
+=======
+        return self.ros_node.joint_vel_[:29]  # shape (29,)
+>>>>>>> 17f938fb4c26a86fa10d2d00379403cbc700d554
 
     def _get_last_action_obs(self):
         """Return shape: (num_active_joints,)"""
