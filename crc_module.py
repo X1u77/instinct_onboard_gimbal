@@ -1,121 +1,110 @@
-"""CRC module for Unitree LowCmd message checksum.
+"""CRC helper for Unitree HG LowCmd messages.
 
-Implements the CRC16-CITT checksum used by Unitree SDK for LowCmd messages.
-The polynomial is 0x1021 (CRC-CCITT), initialized to 0xFFFF.
-
-Usage:
-    from crc_module import get_crc
-    low_cmd.crc = get_crc(low_cmd)
-    publisher.publish(low_cmd)
+This mirrors the Unitree SDK2 Python HG LowCmd packing and CRC32 algorithm
+while accepting ROS message objects from ``unitree_hg.msg``.
 """
 
 import struct
 from typing import Any
 
 
-def _crc16_ccitt(data: bytes) -> int:
-    """Compute CRC16-CCITT (polynomial 0x1021) over a byte buffer.
+LOWCMD_MOTOR_COUNT = 35
 
-    This is the standard CRC algorithm used by Unitree SDK for validating
-    LowCmd messages sent over the network.
 
-    Args:
-        data: Raw byte buffer to compute CRC over.
+def _crc32_unitree(data: bytes) -> int:
+    """Compute the CRC32 used by Unitree SDK2."""
+    if len(data) % 4 != 0:
+        raise ValueError("Unitree CRC input must be aligned to 32-bit words.")
 
-    Returns:
-        16-bit CRC value (unsigned).
-    """
-    crc = 0xFFFF
-    for byte in data:
-        crc ^= byte << 8
-        for _ in range(8):
-            if crc & 0x8000:
-                crc = (crc << 1) ^ 0x1021
+    crc = 0xFFFFFFFF
+    polynomial = 0x04C11DB7
+
+    # Unitree SDK2 first interprets the packed little-endian byte buffer as
+    # uint32 words, then feeds those words to the CRC routine.
+    words = struct.unpack(f"<{len(data) // 4}I", data)
+    for word in words:
+        for bit in range(31, -1, -1):
+            if crc & 0x80000000:
+                crc = (crc << 1) ^ polynomial
             else:
-                crc = crc << 1
-            crc &= 0xFFFF
+                crc <<= 1
+            if word & (1 << bit):
+                crc ^= polynomial
+            crc &= 0xFFFFFFFF
+
     return crc
 
 
-def get_crc(msg: Any) -> int:
-    """Compute the CRC for a Unitree LowCmd message.
+def _uint32(value: Any, default: int = 0) -> int:
+    return int(value if value is not None else default) & 0xFFFFFFFF
 
-    The CRC is computed over the raw byte representation of the control data
-    (everything before the crc field), serialized in little-endian format.
 
-    LowCmd structure (from unitree_hg):
-        uint8 mode_machine
-        uint8 mode_pr
-        uint8[10] padding (or similar reserved bytes)
-        MotorCmd[30] motor_cmd
-        uint32 crc (NOT included in CRC computation)
+def _uint8(value: Any, default: int = 0) -> int:
+    return int(value if value is not None else default) & 0xFF
 
-    Each MotorCmd:
-        uint8 mode
-        uint8 reserved
-        float q
-        float dq
-        float ddq (often zeroed)
-        float tau
-        float kp
-        float kd
 
-    Args:
-        msg: A unitree_hg.msg.LowCmd message object.
+def _float32(value: Any, default: float = 0.0) -> float:
+    return float(value if value is not None else default)
 
-    Returns:
-        16-bit CRC value as uint32.
-    """
+
+def _get_sequence_item(value: Any, index: int, default: int = 0) -> int:
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return int(value) if index == 0 else default
+    if index < len(value):
+        return int(value[index])
+    return default
+
+
+def _get_reserve_words(obj: Any, count: int) -> list[int]:
+    reserve = getattr(obj, "reserve", None)
+    if reserve is None:
+        reserve = getattr(obj, "reserved", None)
+    return [_uint32(_get_sequence_item(reserve, i, 0)) for i in range(count)]
+
+
+def _pack_motor_cmd(motor: Any | None) -> bytes:
+    if motor is None:
+        return struct.pack("<B3x5fI", 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0)
+
+    reserve_word = _get_reserve_words(motor, 1)[0]
+    return struct.pack(
+        "<B3x5fI",
+        _uint8(getattr(motor, "mode", 0)),
+        _float32(getattr(motor, "q", 0.0)),
+        _float32(getattr(motor, "dq", 0.0)),
+        _float32(getattr(motor, "tau", 0.0)),
+        _float32(getattr(motor, "kp", 0.0)),
+        _float32(getattr(motor, "kd", 0.0)),
+        reserve_word,
+    )
+
+
+def _pack_lowcmd_hg(msg: Any) -> bytes:
+    """Pack a LowCmd in the same field order as Unitree SDK2 PackLowCmdHG."""
     buf = bytearray()
+    buf.extend(
+        struct.pack(
+            "<2B2x",
+            _uint8(getattr(msg, "mode_pr", 0)),
+            _uint8(getattr(msg, "mode_machine", 0)),
+        )
+    )
 
-    # mode_machine (uint8)
-    buf.extend(struct.pack("<B", msg.mode_machine))
+    motors = getattr(msg, "motor_cmd", [])
+    for i in range(LOWCMD_MOTOR_COUNT):
+        motor = motors[i] if i < len(motors) else None
+        buf.extend(_pack_motor_cmd(motor))
 
-    # mode_pr (uint8)
-    buf.extend(struct.pack("<B", msg.mode_pr))
+    for word in _get_reserve_words(msg, 4):
+        buf.extend(struct.pack("<I", word))
 
-    # Reserved / padding bytes (typically 10 bytes in unitree_hg LowCmd)
-    # Inspect motor_cmd[0] to detect the reserved field
-    if len(msg.motor_cmd) > 0:
-        first_motor = msg.motor_cmd[0]
-        # Determine reserved field size by checking the struct layout
-        motor0_size = 0
-        if hasattr(first_motor, "reserved"):
-            # reserved is uint8[2] or similar
-            motor0_size += 2
-        motor0_size += 4  # q (float)
-        motor0_size += 4  # dq (float)
-        motor0_size += 4  # ddq (float)
-        motor0_size += 4  # tau (float)
-        motor0_size += 4  # kp (float)
-        motor0_size += 4  # kd (float)
+    buf.extend(struct.pack("<I", _uint32(getattr(msg, "crc", 0))))
+    return bytes(buf)
 
-        # Each motor: 26 bytes total (1 mode + 1 reserved + 6 floats)
-        for i in range(30):
-            motor = msg.motor_cmd[i]
-            buf.extend(struct.pack("<B", motor.mode))
-            if hasattr(motor, "reserved"):
-                if isinstance(motor.reserved, (int, float)):
-                    buf.extend(struct.pack("<B", int(motor.reserved)))
-                elif isinstance(motor.reserved, (list, tuple, bytes)) and len(motor.reserved) >= 1:
-                    buf.extend(struct.pack("<B", int(motor.reserved[0])))
-                else:
-                    buf.extend(struct.pack("<B", 0))
-            else:
-                buf.extend(struct.pack("<B", 0))
-            buf.extend(struct.pack("<f", motor.q))
-            buf.extend(struct.pack("<f", motor.dq))
-            if hasattr(motor, "ddq"):
-                buf.extend(struct.pack("<f", motor.ddq))
-            else:
-                buf.extend(struct.pack("<f", 0.0))
-            buf.extend(struct.pack("<f", motor.tau))
-            buf.extend(struct.pack("<f", motor.kp))
-            buf.extend(struct.pack("<f", motor.kd))
-    else:
-        # No motors - padding only
-        pass
 
-    crc_val = _crc16_ccitt(bytes(buf))
-    # Unitree SDK stores CRC as uint32 even though it's a 16-bit CRC
-    return crc_val
+def get_crc(msg: Any) -> int:
+    """Return the Unitree SDK2 CRC32 for a ``unitree_hg.msg.LowCmd`` object."""
+    packed = _pack_lowcmd_hg(msg)
+    return _crc32_unitree(packed[:-4])

@@ -364,8 +364,9 @@ class UnitreeNode(RealNode):
                 self.low_cmd_buffer.motor_cmd[real_idx].kp = p_gains[sim_idx].item()
                 self.low_cmd_buffer.motor_cmd[real_idx].kd = d_gains[sim_idx].item()
 
-        # Head gimbal joints (sim_index 29-30)
-        self._publish_gimbal_cmd(target_joint_pos)
+        # Head gimbal joints (sim_index 29-30), only present in the 31-DOF config.
+        if self.NUM_JOINTS >= 31 and len(target_joint_pos) >= 31:
+            self._publish_gimbal_cmd(target_joint_pos)
 
         self.low_cmd_buffer.crc = get_crc(self.low_cmd_buffer)
         self.low_cmd_publisher.publish(self.low_cmd_buffer)
@@ -374,6 +375,9 @@ class UnitreeNode(RealNode):
         """Send head joint commands to the gimbal servo controller.
         Converts simulation coordinates (radians) to servo coordinates (degrees).
         """
+        if self.NUM_JOINTS < 31 or len(target_joint_pos) < 31:
+            return
+
         # head_yaw (sim_idx=29): sim radians -> servo degrees
         # joint_signs[29] = -1 (sim=left+ -> servo=right+)
         head_yaw_sim = target_joint_pos[29]
