@@ -397,9 +397,11 @@ class PerceptiveTrackerAgent(TrackerAgent):
                 0.5,
             )
         # crop the depth image
+        up, down, left, right = self.depth_image_crop_region
+        h, w = depth_image.shape
         depth_image = depth_image[
-            self.depth_image_crop_region[0] : -self.depth_image_crop_region[1],
-            self.depth_image_crop_region[2] : -self.depth_image_crop_region[3],
+            up   : h - down  if down  > 0 else h,
+            left : w - right if right > 0 else w,
         ]
         # resize the depth image to the final resolution
         depth_image = cv2.resize(

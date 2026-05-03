@@ -194,7 +194,7 @@ class ShadowingAgent(OnboardAgent):
     def _get_joint_pos_ref_command_cmd_obs(self):
         """Command, return shape: (num_frames, num_joints)"""
         return (
-            self.ros_node.packed_motion_sequence_buffer["joint_pos"] - self.ros_node.default_joint_pos[None, :]
+            self.ros_node.packed_motion_sequence_buffer["joint_pos"] - self.default_joint_pos[None, :]
         )  # (num_frames, num_joints)
 
     def _get_joint_pos_err_ref_command_cmd_obs(self):

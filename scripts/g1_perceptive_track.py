@@ -168,15 +168,6 @@ class G1TrackingNode(UnitreeRsCameraNode):
 
         elif self.current_agent_name == "cold_start":
             action, done = self.available_agents[self.current_agent_name].step()
-            if done and ("walk" in self.available_agents.keys()):
-                self.get_logger().info(
-                    "ColdStartAgent done, press 'L1' to switch to walk agent.", throttle_duration_sec=10.0
-                )
-            else:
-                self.get_logger().info(
-                    "ColdStartAgent done, press any direction button to switch to tracking agent.",
-                    throttle_duration_sec=10.0,
-                )
             self.send_action(
                 action,
                 self.available_agents[self.current_agent_name].action_offset,
@@ -184,6 +175,12 @@ class G1TrackingNode(UnitreeRsCameraNode):
                 self.available_agents[self.current_agent_name].p_gains,
                 self.available_agents[self.current_agent_name].d_gains,
             )
+            if done:
+                self.get_logger().info(
+                    "ColdStartAgent done, press 'L1' to switch to walk agent, "
+                    "or any direction button to switch to tracking agent.",
+                    throttle_duration_sec=10.0,
+                )
             if done and (self.joy_stick_data.L1):
                 self.get_logger().info("L1 button pressed, switching to walk agent.")
                 self.current_agent_name = "walk"
@@ -191,6 +188,26 @@ class G1TrackingNode(UnitreeRsCameraNode):
             if done and (self.joy_stick_data.up):
                 if "walk" in self.available_agents.keys():
                     self.get_logger().warn("up button pressed, but there is a walk agent registered. ignored")
+                else:
+                    self.get_logger().info("up button pressed, switching to tracking agent.")
+                    self.current_agent_name = "tracking"
+                    self.available_agents[self.current_agent_name].reset("diveroll4-ziwen-0-retargeted.npz")
+            if done and (self.joy_stick_data.down):
+                self.get_logger().info("down button pressed, switching to tracking agent.")
+                self.current_agent_name = "tracking"
+                self.available_agents[self.current_agent_name].reset("kneelClimbStep1-x-0.1-ziwen-retargeted.npz")
+            if done and (self.joy_stick_data.left):
+                self.get_logger().info("left button pressed, switching to tracking agent.")
+                self.current_agent_name = "tracking"
+                self.available_agents[self.current_agent_name].reset("rollVault11-ziwen-retargeted.npz")
+            if done and (self.joy_stick_data.right):
+                self.get_logger().info("right button pressed, switching to tracking agent.")
+                self.current_agent_name = "tracking"
+                self.available_agents[self.current_agent_name].reset("jumpsit2-ziwen-retargeted.npz")
+            if done and (self.joy_stick_data.X):
+                self.get_logger().info("X button pressed, switching to tracking agent.")
+                self.current_agent_name = "tracking"
+                self.available_agents[self.current_agent_name].reset("superheroLanding-retargeted.npz")
 
         elif self.current_agent_name == "walk":
             action, done = self.available_agents[self.current_agent_name].step()

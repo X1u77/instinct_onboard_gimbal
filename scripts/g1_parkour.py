@@ -287,6 +287,16 @@ def main(args):
 if __name__ == "__main__":
     import argparse
 
+    def _parse_2float(s):
+        """Parse a string of two space-separated floats into a list."""
+        values = s.split()
+        if len(values) != 2:
+            raise argparse.ArgumentTypeError(f"Expected 2 floats, got {len(values)}: {s!r}")
+        try:
+            return [float(values[0]), float(values[1])]
+        except ValueError as e:
+            raise argparse.ArgumentTypeError(f"Invalid float value: {e}")
+
     parser = argparse.ArgumentParser(description="G1 Parkour Node")
     parser.add_argument(
         "--standdir",
@@ -330,7 +340,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--lin_vel_range",
-        type=list,
+        type=_parse_2float,
         default=[0.5, 0.5],
         help="Range of linear velocity, only forward (default: [0.5 0.5])",
     )
@@ -342,9 +352,9 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--ang_vel_range",
-        type=list,
+        type=_parse_2float,
         default=[0.0, 1.0],
-        help="Range of linear velocity, both turn left and turn right (default: [0.0 1.0])",
+        help="Range of angular velocity, both turn left and turn right (default: [0.0 1.0])",
     )
     parser.add_argument(
         "--nodryrun",
