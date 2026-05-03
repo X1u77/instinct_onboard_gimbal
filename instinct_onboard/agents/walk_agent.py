@@ -5,6 +5,7 @@ import os
 import numpy as np
 import onnxruntime as ort
 
+from instinct_onboard import robot_cfgs
 from instinct_onboard.agents.base import OnboardAgent
 from instinct_onboard.normalizer import Normalizer
 from instinct_onboard.ros_nodes.base import RealNode
@@ -75,3 +76,51 @@ class WalkAgent(OnboardAgent):
     def _get_base_velocity_cmd_obs(self):
         """An alias for _get_base_velocity_command_obs"""
         return self._get_base_velocity_command_cmd_obs()
+
+
+class Body29ActorOn31Agent(WalkAgent):
+    """Run a 29-DoF actor-only policy on a 31-DoF onboard node.
+
+    The first 29 joints are shared between the 29-DoF and 31-DoF robot definitions.
+    Head joints are held at the 31-DoF default pose and excluded from the policy
+    observation/action interface.
+    """
+
+    BODY_DOF = 29
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._body_joint_ids = np.arange(self.BODY_DOF, dtype=np.int64)
+        self._head_joint_ids = np.arange(self.BODY_DOF, self.ros_node.NUM_ACTIONS, dtype=np.int64)
+        self._apply_head_defaults()
+
+    def _apply_head_defaults(self):
+        if self.ros_node.NUM_ACTIONS <= self.BODY_DOF:
+            return
+        head_default = robot_cfgs.G1_31Dof_TorsoBase.head_default_joint_pos
+        self.default_joint_pos[self._head_joint_ids] = head_default[: len(self._head_joint_ids)]
+        self._action_offset[self._head_joint_ids] = head_default[: len(self._head_joint_ids)]
+        self._action_scale[self._head_joint_ids] = 0.0
+
+    def _get_joint_pos_obs(self):
+        return self.ros_node.joint_pos_[self._body_joint_ids]
+
+    def _get_joint_vel_obs(self):
+        return self.ros_node.joint_vel_[self._body_joint_ids]
+
+    def _get_joint_pos_rel_obs(self):
+        return self.ros_node.joint_pos_[self._body_joint_ids] - self.default_joint_pos[self._body_joint_ids]
+
+    def _get_joint_vel_rel_obs(self):
+        return self.ros_node.joint_vel_[self._body_joint_ids] - self.default_joint_vel[self._body_joint_ids]
+
+    def _get_last_action_obs(self):
+        return np.asarray(self.ros_node.action, dtype=np.float32)[self._body_joint_ids]
+
+    def step(self):
+        body_action, done = super().step()
+        if self.ros_node.NUM_ACTIONS <= self.BODY_DOF:
+            return body_action, done
+        full_action = np.zeros(self.ros_node.NUM_ACTIONS, dtype=np.float32)
+        full_action[self._body_joint_ids] = body_action[: self.BODY_DOF]
+        return full_action, done

@@ -31,11 +31,14 @@ assert SIZE_OF_MP_SHARED_HEADER == 32
 
 
 class RealSenseCamera:
-    def __init__(self, resolution: tuple[int, int], fps: int):
+    def __init__(self, resolution: tuple[int, int], fps: int, serial_number: str | None = None):
         self.resolution = resolution  # (width, height)
         self.fps = fps
+        self.serial_number = serial_number
         self.pipeline = rs.pipeline()
         self.config = rs.config()
+        if self.serial_number:
+            self.config.enable_device(self.serial_number)
         self.config.enable_stream(
             rs.stream.depth,
             self.resolution[0],
@@ -72,11 +75,12 @@ def camera_process_func(
     resolution: tuple[int, int],
     fps: int,
     shm_name: str,
+    serial_number: str | None,
     camera_process_affinity: set[int] | None,
 ) -> None:
     if camera_process_affinity is not None:
         os.sched_setaffinity(os.getpid(), camera_process_affinity)
-    camera = RealSenseCamera(resolution, fps)
+    camera = RealSenseCamera(resolution, fps, serial_number=serial_number)
     shared_memory = mp.shared_memory.SharedMemory(name=shm_name)
     header = MpSharedHeader.from_buffer(shared_memory.buf)
     image_buffer = np.ndarray(
@@ -121,6 +125,7 @@ class RsCameraNodeMixin:
         rs_resolution: tuple[int, int] = (480, 270),  # (width, height)
         rs_fps: int = 60,
         rs_vfov_deg: float = 58.0,
+        rs_serial_number: str | None = None,
         camera_individual_process: bool = False,
         camera_dead_behavior: Literal["restart", "raise_error", "none"] = "restart",
         main_process_affinity: set[int] | None = None,
@@ -132,6 +137,7 @@ class RsCameraNodeMixin:
         self.rs_resolution = rs_resolution
         self.rs_fps = rs_fps
         self.rs_vfov_deg = rs_vfov_deg
+        self.rs_serial_number = rs_serial_number
         self.camera_individual_process = camera_individual_process
         self.camera_dead_behavior = camera_dead_behavior
         self.main_process_affinity = main_process_affinity
@@ -166,6 +172,7 @@ class RsCameraNodeMixin:
                     self.rs_resolution,
                     self.rs_fps,
                     self.rs_shared_memory.name,
+                    self.rs_serial_number,
                     self.camera_process_affinity,
                 ),
                 daemon=True,
@@ -180,6 +187,7 @@ class RsCameraNodeMixin:
             self.camera = RealSenseCamera(
                 resolution=self.rs_resolution,
                 fps=self.rs_fps,
+                serial_number=self.rs_serial_number,
             )
 
     def restart_camera(self):
@@ -195,6 +203,7 @@ class RsCameraNodeMixin:
                     self.rs_resolution,
                     self.rs_fps,
                     self.rs_shared_memory.name,
+                    self.rs_serial_number,
                     self.camera_process_affinity,
                 ),
                 daemon=True,

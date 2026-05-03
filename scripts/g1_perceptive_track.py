@@ -119,6 +119,7 @@ Example Usage:
 Notes:
     - The script runs at 50Hz main loop frequency (20ms period)
     - RealSense camera is configured at 480x270 resolution, 60 FPS
+    - Default RealSense serial number: 243622073048
     - Robot configuration: G1_29Dof_TorsoBase (29 degrees of freedom)
     - Joint position protection ratio: 2.0
     - Camera runs in a separate process for better performance
@@ -313,6 +314,7 @@ def main(args):
     node = G1TrackingNode(
         rs_resolution=(480, 270),  # (width, height)
         rs_fps=60,
+        rs_serial_number=args.camera_serial,
         camera_individual_process=True,
         joint_pos_protect_ratio=2.0,
         robot_class_name="G1_29Dof_TorsoBase",
@@ -382,6 +384,12 @@ if __name__ == "__main__":
         type=str,
         help="Directory to load the walk agent from",
         default=None,
+    )
+    parser.add_argument(
+        "--camera_serial",
+        type=str,
+        default="243622073048",
+        help="Serial number of the RealSense device to use (default: 243622073048)",
     )
     parser.add_argument(
         "--startup_step_size",
