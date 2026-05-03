@@ -21,7 +21,7 @@ class ExampleNode(UnitreeNode):
         """Main loop callback for the ROS node."""
         # This is where you would implement the main loop logic for your ROS node.
         # For example, you could publish messages, process incoming data, etc.
-        self.get_logger().info("ExampleNode main loop is running.", throttle_duration_sec=5.0)
+        self.get_logger().info("ExampleNode main loop is running.")
         # You can also call agent methods here if needed.
         action, done = self.agent.step()
         self.send_action(

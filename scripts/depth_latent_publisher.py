@@ -136,7 +136,7 @@ class DepthLatentPublisher(Node):
         rs_frame = self.rs_pipeline.wait_for_frames()  # ms
         depth_frame = rs_frame.get_depth_frame()
         if not depth_frame:
-            self.get_logger().error("No depth frame", throttle_duration_sec=1)
+            self.get_logger().error("No depth frame")
             return
         # apply relsense filters
         for rs_filter in self.rs_filters:

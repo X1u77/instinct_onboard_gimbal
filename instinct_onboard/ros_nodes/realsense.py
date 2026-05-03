@@ -233,7 +233,7 @@ class RsCameraNodeMixin:
                 rs_timestamp = self.rs_shared_header.timestamp
                 self.rs_depth_data[:] = self.rs_image_buffer
                 self.get_logger().info(
-                    f"Realsense depth data delayed: {(time.time() - rs_timestamp):.4f} s.", throttle_duration_sec=5.0
+                    f"Realsense depth data delayed: {(time.time() - rs_timestamp):.4f} s."
                 )
                 refreshed = True
             self.rs_data_fresh_counter += 1

@@ -109,20 +109,20 @@ class G1TrackingNode(UnitreeNode):
     def main_loop_callback(self):
         if self.current_agent_name is None:
             self.get_logger().info("Starting cold start agent automatically.")
-            self.get_logger().info("Press 'A' button to match motion to current heading.", throttle_duration_sec=2.0)
+            self.get_logger().info("Press 'A' button to match motion to current heading.")
             self.current_agent_name = "cold_start"
             self.available_agents[self.current_agent_name].reset()
             return
 
         if self.joy_stick_data.A:
-            self.get_logger().info("A button pressed, matching motion to current heading.", throttle_duration_sec=2.0)
+            self.get_logger().info("A button pressed, matching motion to current heading.")
             self.available_agents["tracking"].match_to_current_heading()
 
         elif self.current_agent_name == "cold_start":
             action, done = self.available_agents[self.current_agent_name].step()
             if done:
                 self.get_logger().info(
-                    "ColdStartAgent done, press 'L1' to switch to tracking agent.", throttle_duration_sec=10.0
+                    "ColdStartAgent done, press 'L1' to switch to tracking agent."
                 )
             self.send_action(
                 action,

@@ -154,7 +154,7 @@ class UnitreeNode(RealNode):
                 self._gimbal_joint_pos[:] = new_pos
                 self._gimbal_last_read_time = now
         except Exception as e:
-            self.get_logger().warn(f"Failed to read gimbal feedback: {e}", throttle_duration_sec=1.0)
+            self.get_logger().warn(f"Failed to read gimbal feedback: {e}")
 
     def _stop_gimbal_reader(self):
         self._gimbal_reader_stop.set()

@@ -157,13 +157,13 @@ class G1TrackingNode(UnitreeRsCameraNode):
         main_loop_callback_start_time = time.time()
         if self.current_agent_name is None:
             self.get_logger().info("Starting cold start agent automatically.")
-            self.get_logger().info("Press 'A' button to match motion to current heading.", throttle_duration_sec=2.0)
+            self.get_logger().info("Press 'A' button to match motion to current heading.")
             self.current_agent_name = "cold_start"
             self.available_agents[self.current_agent_name].reset()
             return
 
         if self.joy_stick_data.A:
-            self.get_logger().info("A button pressed, matching motion to current heading.", throttle_duration_sec=2.0)
+            self.get_logger().info("A button pressed, matching motion to current heading.")
             self.available_agents["tracking"].match_to_current_heading()
 
         elif self.current_agent_name == "cold_start":
@@ -178,8 +178,7 @@ class G1TrackingNode(UnitreeRsCameraNode):
             if done:
                 self.get_logger().info(
                     "ColdStartAgent done, press 'L1' to switch to walk agent, "
-                    "or any direction button to switch to tracking agent.",
-                    throttle_duration_sec=10.0,
+                    "or any direction button to switch to tracking agent."
                 )
             if done and (self.joy_stick_data.L1):
                 self.get_logger().info("L1 button pressed, switching to walk agent.")
