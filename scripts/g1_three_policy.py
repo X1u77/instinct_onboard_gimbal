@@ -9,10 +9,10 @@ from tf2_ros import TransformBroadcaster
 
 from instinct_onboard.agents.base import ColdStartAgent
 from instinct_onboard.agents.parkour_agent import ParkourAgent
-from instinct_onboard.agents.walk_agent import Body29ActorOn31Agent
 from instinct_onboard.ros_nodes.realsense import UnitreeRsCameraNode
 
 MAIN_LOOP_FREQUENCY_CHECK_INTERVAL = 500
+DEFAULT_CAMERA_SERIAL = "420122071680"
 
 
 class G1ThreePolicyNode(UnitreeRsCameraNode):
@@ -20,6 +20,7 @@ class G1ThreePolicyNode(UnitreeRsCameraNode):
         super().__init__(*args, **kwargs)
         self.available_agents = dict()
         self.current_agent_name: str | None = None
+        self.current_speed_scale = 0.0
 
     def register_agent(self, name: str, agent):
         self.available_agents[name] = agent
@@ -40,6 +41,14 @@ class G1ThreePolicyNode(UnitreeRsCameraNode):
         self.get_logger().info(reason)
         self.current_agent_name = agent_name
         self.available_agents[self.current_agent_name].reset()
+
+    def _set_speed_scale(self, speed_scale: float, reason: str):
+        speed_scale = float(speed_scale)
+        if abs(self.current_speed_scale - speed_scale) < 1e-6:
+            return
+        self.current_speed_scale = speed_scale
+        self.available_agents["parkour"].set_speed_scale(speed_scale)
+        self.get_logger().info(reason)
 
     def _step_current_agent(self):
         action, done = self.available_agents[self.current_agent_name].step()
@@ -63,36 +72,19 @@ class G1ThreePolicyNode(UnitreeRsCameraNode):
         if self.current_agent_name == "cold_start":
             done = self._step_current_agent()
             if done:
+                self.available_agents["parkour"].set_speed_scale(self.current_speed_scale)
+                self.current_agent_name = "parkour"
+                self.available_agents[self.current_agent_name].reset()
                 self.get_logger().info(
-                    "ColdStartAgent done. Press 'L1' for 29dof stand, 'UP' for 29dof parkour, 'R1' for 31dof parkour."
+                    "ColdStartAgent done. Entering 31dof parkour policy. Press 'R1' for scale=0.0, 'L1' for scale=0.5."
                 )
-            if done and self.joy_stick_data.L1:
-                self._switch_to("stand29", "L1 button pressed, switching to 29dof stand.")
-            elif done and self.joy_stick_data.up:
-                self._switch_to("parkour29", "UP button pressed, switching to 29dof parkour.")
-            elif done and self.joy_stick_data.R1:
-                self._switch_to("parkour31", "R1 button pressed, switching to 31dof parkour.")
 
-        elif self.current_agent_name == "stand29":
+        elif self.current_agent_name == "parkour":
             self._step_current_agent()
-            if self.joy_stick_data.up:
-                self._switch_to("parkour29", "UP button pressed, switching to 29dof parkour.")
-            elif self.joy_stick_data.R1:
-                self._switch_to("parkour31", "R1 button pressed, switching to 31dof parkour.")
-
-        elif self.current_agent_name == "parkour29":
-            self._step_current_agent()
-            if self.joy_stick_data.L1:
-                self._switch_to("stand29", "L1 button pressed, switching to 29dof stand.")
-            elif self.joy_stick_data.R1:
-                self._switch_to("parkour31", "R1 button pressed, switching to 31dof parkour.")
-
-        elif self.current_agent_name == "parkour31":
-            self._step_current_agent()
-            if self.joy_stick_data.L1:
-                self._switch_to("stand29", "L1 button pressed, switching to 29dof stand.")
-            elif self.joy_stick_data.up:
-                self._switch_to("parkour29", "UP button pressed, switching to 29dof parkour.")
+            if self.joy_stick_data.R1:
+                self._set_speed_scale(0.0, "R1 button pressed, setting speed_scale=0.0.")
+            elif self.joy_stick_data.L1:
+                self._set_speed_scale(0.5, "L1 button pressed, setting speed_scale=0.5.")
 
         if MAIN_LOOP_FREQUENCY_CHECK_INTERVAL > 1:
             self.main_loop_callback_time_consumptions.put(time.time() - start_time)
@@ -114,7 +106,7 @@ def main(args):
     node = G1ThreePolicyNode(
         rs_resolution=(480, 270),
         rs_fps=60,
-        rs_serial_number=args.camera_serial,
+        rs_serial_number=DEFAULT_CAMERA_SERIAL,
         camera_individual_process=True,
         joint_pos_protect_ratio=2.0,
         robot_class_name="G1_31Dof_TorsoBase",
@@ -125,37 +117,25 @@ def main(args):
         gimbal_tilt_range=tuple(np.rad2deg([0.5, 1.5])),
     )
 
-    stand29_agent = Body29ActorOn31Agent(
-        logdir=args.stand29_logdir,
-        ros_node=node,
-    )
-    parkour29_agent = Body29ActorOn31Agent(
-        logdir=args.parkour29_logdir,
-        ros_node=node,
-    )
-    parkour31_agent = ParkourAgent(
-        logdir=args.parkour31_logdir,
+    parkour_agent = ParkourAgent(
+        logdir=args.logdir,
         ros_node=node,
         depth_vis=args.depth_vis,
         pointcloud_vis=args.pointcloud_vis,
-        lin_vel_deadband=args.lin_vel_deadband,
-        lin_vel_range=args.lin_vel_range,
-        ang_vel_deadband=args.ang_vel_deadband,
-        ang_vel_range=args.ang_vel_range,
+        initial_speed_scale=0.0,
     )
+    parkour_agent.set_speed_scale(0.0)
 
-    node.register_agent("stand29", stand29_agent)
-    node.register_agent("parkour29", parkour29_agent)
-    node.register_agent("parkour31", parkour31_agent)
+    node.register_agent("parkour", parkour_agent)
 
     cold_start_agent = ColdStartAgent(
         startup_step_size=args.startup_step_size,
         ros_node=node,
-        joint_target_pos=stand29_agent.default_joint_pos,
-        action_scale=stand29_agent.action_scale,
-        action_offset=stand29_agent.action_offset,
-        p_gains=stand29_agent.p_gains * args.kpkd_factor,
-        d_gains=stand29_agent.d_gains * args.kpkd_factor,
+        joint_target_pos=parkour_agent.default_joint_pos,
+        action_scale=parkour_agent.action_scale,
+        action_offset=parkour_agent.action_offset,
+        p_gains=parkour_agent.p_gains * args.kpkd_factor,
+        d_gains=parkour_agent.d_gains * args.kpkd_factor,
     )
     node.register_agent("cold_start", cold_start_agent)
 
@@ -177,25 +157,8 @@ def main(args):
 if __name__ == "__main__":
     import argparse
 
-    def _parse_2float(s):
-        values = s.split()
-        if len(values) != 2:
-            raise argparse.ArgumentTypeError(f"Expected 2 floats, got {len(values)}: {s!r}")
-        try:
-            return [float(values[0]), float(values[1])]
-        except ValueError as e:
-            raise argparse.ArgumentTypeError(f"Invalid float value: {e}")
-
-    parser = argparse.ArgumentParser(description="G1 three-policy deployment node")
-    parser.add_argument("--stand29_logdir", type=str, help="Directory to load the 29dof stand agent from")
-    parser.add_argument("--parkour29_logdir", type=str, help="Directory to load the 29dof parkour agent from")
-    parser.add_argument("--parkour31_logdir", type=str, help="Directory to load the 31dof parkour agent from")
-    parser.add_argument(
-        "--camera_serial",
-        type=str,
-        default="420122071680",
-        help="Serial number of the RealSense device to use (default: 420122071680)",
-    )
+    parser = argparse.ArgumentParser(description="G1 single-policy deployment node with discrete speed scales")
+    parser.add_argument("--logdir", type=str, help="Directory to load the 31dof parkour agent from")
     parser.add_argument(
         "--startup_step_size",
         type=float,
@@ -219,30 +182,6 @@ if __name__ == "__main__":
         action="store_true",
         default=False,
         help="Visualize the pointcloud for the 31dof parkour policy (default: False)",
-    )
-    parser.add_argument(
-        "--lin_vel_deadband",
-        type=float,
-        default=0.5,
-        help="Deadband of wireless control for linear velocity (default: 0.5)",
-    )
-    parser.add_argument(
-        "--lin_vel_range",
-        type=_parse_2float,
-        default=[0.5, 0.5],
-        help="Range of linear velocity for the 31dof parkour policy (default: [0.5 0.5])",
-    )
-    parser.add_argument(
-        "--ang_vel_deadband",
-        type=float,
-        default=0.5,
-        help="Deadband of wireless control for angular velocity (default: 0.5)",
-    )
-    parser.add_argument(
-        "--ang_vel_range",
-        type=_parse_2float,
-        default=[0.0, 1.0],
-        help="Range of angular velocity for the 31dof parkour policy (default: [0.0 1.0])",
     )
     parser.add_argument(
         "--nodryrun",

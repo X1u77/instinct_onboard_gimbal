@@ -31,6 +31,7 @@ class ParkourAgent(OnboardAgent):
         ros_node: RealNode,
         depth_vis: bool = True,
         pointcloud_vis: bool = True,
+        initial_speed_scale: float = 0.0,
         lin_vel_deadband=0.5,
         lin_vel_range=[0.5, 0.5],
         ang_vel_deadband=0.15,
@@ -38,6 +39,7 @@ class ParkourAgent(OnboardAgent):
     ):
         super().__init__(logdir, ros_node)
         self.ort_sessions = dict()
+        self.speed_scale = float(initial_speed_scale)
         self.lin_vel_deadband = lin_vel_deadband
         self.ang_vel_deadband = ang_vel_deadband
         self.cmd_px_range = lin_vel_range
@@ -62,7 +64,7 @@ class ParkourAgent(OnboardAgent):
 
     def _parse_obs_config(self):
         super()._parse_obs_config()
-        with open(os.path.join(self.logdir, "params", "agent.yaml")) as f:
+        with open(self._resolve_logdir_path("params", "agent.yaml")) as f:
             self.agent_cfg = yaml.unsafe_load(f)
         all_obs_names = list(self.obs_funcs.keys())
         self.proprio_obs_names = [obs_name for obs_name in all_obs_names if "depth" not in obs_name]
@@ -164,9 +166,9 @@ class ParkourAgent(OnboardAgent):
         """Load the ONNX model for the agent."""
         # load ONNX models
         ort_execution_providers = ort.get_available_providers()
-        depth_encoder_path = os.path.join(self.logdir, "exported", "0-depth_encoder.onnx")
+        depth_encoder_path = self._resolve_logdir_path("exported", "0-depth_encoder.onnx")
         self.ort_sessions["depth_encoder"] = ort.InferenceSession(depth_encoder_path, providers=ort_execution_providers)
-        actor_path = os.path.join(self.logdir, "exported", "actor.onnx")
+        actor_path = self._resolve_logdir_path("exported", "actor.onnx")
         self.ort_sessions["actor"] = ort.InferenceSession(actor_path, providers=ort_execution_providers)
         print(f"Loaded ONNX models from {self.logdir}")
 
@@ -227,40 +229,12 @@ class ParkourAgent(OnboardAgent):
     Agent specific observation functions for Parkour Agent.
     """
 
-    def _get_base_velocity_obs(self):
-        """Return shape: (3,)"""
-        # left-y for forward/backward
-        ly = self.ros_node.joy_stick_data.ly
-        if ly > self.lin_vel_deadband:
-            vx = (ly - self.lin_vel_deadband) / (1 - self.lin_vel_deadband)  # (0, 1)
-            vx = vx * (self.cmd_px_range[1] - self.cmd_px_range[0]) + self.cmd_px_range[0]
-        elif ly < -self.lin_vel_deadband:
-            vx = (ly + self.lin_vel_deadband) / (1 - self.lin_vel_deadband)  # (-1, 0)
-            vx = vx * (self.cmd_nx_range[1] - self.cmd_nx_range[0]) - self.cmd_nx_range[0]
-        else:
-            vx = 0
-        # left-x for side moving left/right
-        lx = -self.ros_node.joy_stick_data.lx
-        if lx > self.lin_vel_deadband:
-            vy = (lx - self.lin_vel_deadband) / (1 - self.lin_vel_deadband)
-            vy = vy * (self.cmd_py_range[1] - self.cmd_py_range[0]) + self.cmd_py_range[0]
-        elif lx < -self.lin_vel_deadband:
-            vy = (lx + self.lin_vel_deadband) / (1 - self.lin_vel_deadband)
-            vy = vy * (self.cmd_ny_range[1] - self.cmd_ny_range[0]) - self.cmd_ny_range[0]
-        else:
-            vy = 0
-        # right-x for turning left/right
-        rx = -self.ros_node.joy_stick_data.rx
-        if rx > self.ang_vel_deadband:
-            yaw = (rx - self.ang_vel_deadband) / (1 - self.ang_vel_deadband)
-            yaw = yaw * (self.cmd_pyaw_range[1] - self.cmd_pyaw_range[0]) + self.cmd_pyaw_range[0]
-        elif rx < -self.ang_vel_deadband:
-            yaw = (rx + self.ang_vel_deadband) / (1 - self.ang_vel_deadband)
-            yaw = yaw * (self.cmd_nyaw_range[1] - self.cmd_nyaw_range[0]) - self.cmd_nyaw_range[0]
-        else:
-            yaw = 0
+    def set_speed_scale(self, speed_scale: float):
+        self.speed_scale = float(np.clip(speed_scale, 0.0, 1.0))
 
-        self.xyyaw_command = np.array([vx, vy, yaw], dtype=np.float32)
+    def _get_base_velocity_obs(self):
+        """Return the normalized forward speed scale used during training."""
+        self.xyyaw_command = np.array([self.speed_scale], dtype=np.float32)
         return self.xyyaw_command
 
     def _get_joint_vel_rel_obs(self):

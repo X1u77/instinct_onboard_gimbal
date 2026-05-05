@@ -26,9 +26,19 @@ class OnboardAgent(ABC):
         self.logdir = logdir
         self.ros_node: RealNode = ros_node
         assert isinstance(self.ros_node, RealNode), "ros_node must be an instance of RealNode"
-        env_yaml = os.path.join(self.logdir, "params", "env.yaml")
+        env_yaml = self._resolve_logdir_path("params", "env.yaml")
         with open(env_yaml) as f:
             self.cfg = yaml.unsafe_load(f)
+
+    def _resolve_logdir_path(self, *path_parts: str) -> str:
+        """Support both nested artifact layout and flat four-file layout."""
+        nested_path = os.path.join(self.logdir, *path_parts)
+        if os.path.exists(nested_path):
+            return nested_path
+        flat_path = os.path.join(self.logdir, path_parts[-1])
+        if os.path.exists(flat_path):
+            return flat_path
+        return nested_path
 
     def _parse_action_config(self):
         """Parse control-related configurations from the environment YAML file."""
