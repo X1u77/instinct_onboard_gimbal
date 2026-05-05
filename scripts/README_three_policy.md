@@ -28,10 +28,22 @@ python scripts/g1_three_policy.py \
 真机：
 
 ```bash
+cd ~/hmv_deploy
+source instinct_venv/bin/activate
+source ~/unitree_ros2/setup_g1_foxy.sh
+export PYTHONPATH=/home/unitree/ros2_numpy:$PYTHONPATH
+
+python scripts/g1_parkour.py \
+  --logdir "/home/unitree/data_model/data&model/checkpoints/parkour_onboard_preview_stair" \
+  --standdir "/home/unitree/data_model/data&model/checkpoints/stand_onboard" \
+  --depth_vis \
+  --pointcloud_vis \
+  --nodryrun
+
 python scripts/g1_three_policy.py \
-    --stand29_logdir /path/to/stand29 \
-    --parkour29_logdir /path/to/parkour29 \
-    --parkour31_logdir /path/to/parkour31 \
+    --stand29_logdir "/home/unitree/data_model/data&model/checkpoints/stand_onboard" \
+    --parkour29_logdir "/home/unitree/data_model/data&model/checkpoints/parkour_onboard_preview_stair" \
+    --parkour31_logdir "/home/unitree/data_model/data&model/checkpoints/hmv" \
     --gimbal \
     --camera_serial 420122071680 \
     --nodryrun
