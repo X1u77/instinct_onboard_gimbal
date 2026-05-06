@@ -8,7 +8,8 @@ from sensor_msgs.msg import JointState
 from tf2_ros import TransformBroadcaster
 
 from instinct_onboard.agents.base import ColdStartAgent
-from instinct_onboard.agents.parkour_agent import Body29DepthOn31Agent, ParkourAgent
+from instinct_onboard.agents.parkour_agent import ParkourAgent
+from instinct_onboard.agents.walk_agent import Body29ActorOn31Agent
 from instinct_onboard.ros_nodes.realsense import UnitreeRsCameraNode
 
 MAIN_LOOP_FREQUENCY_CHECK_INTERVAL = 500
@@ -133,7 +134,7 @@ def main(args):
     )
     parkour_agent.set_speed_scale(0.0)
 
-    stand_agent = Body29DepthOn31Agent(
+    stand_agent = Body29ActorOn31Agent(
         logdir=args.stand_logdir,
         ros_node=node,
     )

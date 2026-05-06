@@ -1,14 +1,16 @@
-# G1 单 Policy 部署说明
+# G1 双 Policy 部署说明
 
-当前 `scripts/g1_three_policy.py` 已经改成单一 `31DoF parkour policy` 部署脚本。
+当前 `scripts/g1_three_policy.py` 使用两套 policy：
 
-不再包含：
+- `29DoF actor-only stand`
+- `31DoF parkour`
 
-- `29DoF stand`
-- `29DoF parkour`
-- 多 policy 切换逻辑
+其中：
 
-现在只有一个 `31DoF parkour` policy，通过两个按键切换两个固定速度档位。
+- `29DoF stand` 不使用视觉输入
+- `29DoF stand` 不控制头部两个自由度
+- 头部两个自由度在 `stand` 状态下保持 31DoF 默认位姿
+- `31DoF parkour` 继续使用深度相机和头部云台
 
 ## 入口脚本
 
@@ -21,123 +23,86 @@ python scripts/g1_three_policy.py
 Dry-run：
 
 ```bash
-cd ~/hmv_deploy
-source hmv_venv/bin/activate
-source ~/unitree_ros2/setup_g1_foxy.sh
-export PYTHONPATH=/home/unitree/ros2_numpy:$PYTHONPATH
-
 python scripts/g1_three_policy.py \
-    --logdir /home/unitree/hmv_deploy/policy \
+    --stand_logdir /home/user/hyn/instinct/logs/instinct_rl/g1_parkour/20260505_234657 \
+    --logdir /path/to/31dof_parkour \
     --gimbal
 ```
 
 真机：
 
 ```bash
-cd ~/hmv_deploy
-source hmv_venv/bin/activate
-source ~/unitree_ros2/setup_g1_foxy.sh
-export PYTHONPATH=/home/unitree/ros2_numpy:$PYTHONPATH
-
 python scripts/g1_three_policy.py \
-    --logdir /home/unitree/hmv_deploy/policy \
+    --stand_logdir /home/user/hyn/instinct/logs/instinct_rl/g1_parkour/20260505_234657 \
+    --logdir /path/to/31dof_parkour \
     --gimbal \
     --nodryrun
-```
-
-如果云台串口不是默认值 `/dev/ttyUSB0`，再补：
-
-```bash
---gimbal_port /dev/ttyUSB1
 ```
 
 ## 路径说明
 
+- `--stand_logdir`：29DoF 无视觉 stand policy 目录
 - `--logdir`：31DoF parkour policy 目录
-- 当前代码兼容两种目录结构：
-  - 标准结构：`params/env.yaml`、`params/agent.yaml`、`exported/actor.onnx`、`exported/0-depth_encoder.onnx`
-  - 平铺结构：`env.yaml`、`agent.yaml`、`actor.onnx`、`0-depth_encoder.onnx`
 
-你现在这套 policy 可以直接传：
-
-```bash
---logdir /home/unitree/hmv_deploy/policy
-```
-
-## 相机
-
-这个脚本现在默认固定使用唯一的 RealSense：
+对当前 `stand` policy，导出目录里只需要：
 
 ```text
-420122071680
+exported/actor.onnx
 ```
 
-所以启动命令里不再需要传 `--camera_serial`。
+如果存在 `exported/policy_normalizer.npz`，也会自动加载。
 
 ## 状态机
 
-脚本启动后流程如下：
+启动后流程如下：
 
 1. 自动进入 `ColdStart`
-2. `ColdStart` 完成后，自动进入唯一的 `31DoF parkour policy`
-3. 之后通过按键切换速度档位
+2. `ColdStart` 完成后，自动进入 `29DoF stand`
+3. 在 `29DoF stand` 中按 `L1` 切到 `31DoF parkour`
+4. 在 `31DoF parkour` 中按 `R1` 切回 `29DoF stand`
 
 ## 按键
 
-在 `ColdStart` 完成并进入 policy 后：
+`ColdStart` 完成后：
 
-- `R1`：设置 `speed_scale = 0.0`
-- `L1`：设置 `speed_scale = 0.5`
+- 自动进入 `29DoF stand`
 
-含义：
+在 `29DoF stand` 状态：
 
-- `speed_scale = 0.0`：站立/不前进
-- `speed_scale = 0.5`：以训练时最大前进速度的一半运行
+- `R1`：重新进入 `29DoF stand`
+- `L1`：切到 `31DoF parkour`，同时设置 `speed_scale = 0.5`
 
-这套 policy 的训练配置里：
+在 `31DoF parkour` 状态：
 
-- `max_velocity = 1.5 m/s`
+- `R1`：切回 `29DoF stand`
+- `L1`：保持在 `31DoF parkour`，并设置 `speed_scale = 0.5`
 
-因此：
+## 相机和头部
 
-- `scale = 0.0` -> `target_vx = 0.0 m/s`
-- `scale = 0.5` -> `target_vx = 0.75 m/s`
+当前脚本仍然运行在 `G1_31Dof_TorsoBase` 节点上。
+
+- `29DoF stand`
+  - 只控制前 29 个 body joints
+  - 头部两个关节固定在默认位姿
+  - 不读取深度图
+
+- `31DoF parkour`
+  - 控制全部 31 个自由度
+  - 使用深度相机
+  - 头部两个关节通过 gimbal 控制
 
 ## 急停
 
-仍然沿用底层 `UnitreeNode` 的急停逻辑：
+仍然沿用底层 `UnitreeNode` 逻辑：
 
 - `R2`：急停
 - `L2`：急停
 
-任一按下都会停电机并退出进程。
+## 推荐流程
 
-## 当前实现说明
+建议实际使用时：
 
-- 机器人配置：`G1_31Dof_TorsoBase`
-- 头部两自由度由云台控制
-- `velocity_commands` 已按训练配置改成 1 维 `speed_scale`
-- 不再向 policy 输入 3 维遥控速度
-
-## 推荐使用方式
-
-建议流程：
-
-1. 上电后先启动脚本
-2. 等 `ColdStart` 完成
-3. 先按 `R1`，确认 `scale=0.0` 时站稳
-4. 再按 `L1`，切到 `scale=0.5`
-
-## 当前命令模板
-
-```bash
-cd ~/hmv_deploy
-source hmv_venv/bin/activate
-source ~/unitree_ros2/setup_g1_foxy.sh
-export PYTHONPATH=/home/unitree/ros2_numpy:$PYTHONPATH
-
-python scripts/g1_three_policy.py \
-    --logdir /home/unitree/hmv_deploy/policy \
-    --gimbal \
-    --nodryrun
-```
+1. 启动脚本
+2. 等 `ColdStart` 完成，确认 `29DoF stand` 稳定
+3. 到需要进入感知运动时按 `L1`
+4. 需要退回稳定姿态时按 `R1`
