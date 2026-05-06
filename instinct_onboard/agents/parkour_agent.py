@@ -16,6 +16,7 @@ from geometry_msgs.msg import TransformStamped
 from sensor_msgs.msg import CameraInfo, Image, PointCloud2, PointField
 from tf2_ros import StaticTransformBroadcaster
 
+from instinct_onboard import robot_cfgs
 from instinct_onboard.agents.base import OnboardAgent
 from instinct_onboard.ros_nodes.base import RealNode
 from instinct_onboard.utils import CircularBuffer
@@ -140,10 +141,18 @@ class ParkourAgent(OnboardAgent):
             downsample_factor = self.cfg["observations"]["policy"]["depth_image"]["params"]["history_skip_frames"]
         else:
             downsample_factor = self.cfg["observations"]["policy"]["depth_image"]["params"]["time_downsample_factor"]
-        frames = int(
-            (self.cfg["scene"]["camera"]["data_histories"]["distance_to_image_plane_noised"] - 1) / downsample_factor
-            + 1
-        )
+        # In exported configs, history_skip_frames=0 means "use every frame".
+        # Treat it as a stride of 1 instead of dividing by zero below.
+        downsample_factor = max(int(downsample_factor), 1)
+        depth_obs_params = self.cfg["observations"]["policy"]["depth_image"]["params"]
+        if "num_output_frames" in depth_obs_params:
+            frames = int(depth_obs_params["num_output_frames"])
+        else:
+            frames = int(
+                (self.cfg["scene"]["camera"]["data_histories"]["distance_to_image_plane_noised"] - 1)
+                / downsample_factor
+                + 1
+            )
         sim_frequency = int(1 / self.cfg["scene"]["camera"]["update_period"])
         real_downsample_factor = int(self.rs_frequency / sim_frequency * downsample_factor)
         self.depth_obs_indices = np.linspace(-1 - real_downsample_factor * (frames - 1), -1, frames).astype(int)
@@ -323,3 +332,143 @@ class ParkourStandAgent(ParkourAgent):
 
     def _get_depth_image_downsample_obs(self):
         return np.zeros([len(self.depth_obs_indices), self.depth_height, self.depth_width])
+
+
+class Body29DepthOn31Agent(ParkourAgent):
+    """Run a 29-DoF depth policy on a 31-DoF onboard node.
+
+    The stand policy was exported from a 29-DoF robot, so body observations/actions
+    use the first 29 joints while the 2 head joints stay fixed at the 31-DoF default pose.
+    """
+
+    BODY_DOF = 29
+
+    def __init__(
+        self,
+        logdir: str,
+        ros_node: RealNode,
+        depth_vis: bool = False,
+        pointcloud_vis: bool = False,
+        x_vel_scale: float = 0.5,
+        y_vel_scale: float = 0.5,
+        yaw_vel_scale: float = 1.0,
+    ):
+        self.x_vel_scale = x_vel_scale
+        self.y_vel_scale = y_vel_scale
+        self.yaw_vel_scale = yaw_vel_scale
+        super().__init__(
+            logdir=logdir,
+            ros_node=ros_node,
+            depth_vis=depth_vis,
+            pointcloud_vis=pointcloud_vis,
+            initial_speed_scale=0.0,
+        )
+        self._body_joint_ids = np.arange(self.BODY_DOF, dtype=np.int64)
+        self._head_joint_ids = np.arange(self.BODY_DOF, self.ros_node.NUM_ACTIONS, dtype=np.int64)
+        self._apply_head_defaults()
+
+    def _parse_action_config(self):
+        """Parse 29-DoF action config while leaving 31-DoF head joints fixed."""
+        self.default_joint_pos = np.zeros(self.ros_node.NUM_JOINTS, dtype=np.float32)
+        for joint_name_expr, joint_pos in self.cfg["scene"]["robot"]["init_state"]["joint_pos"].items():
+            for i in range(self.BODY_DOF):
+                name = self.ros_node.sim_joint_names[i]
+                if re.search(joint_name_expr, name):
+                    self.default_joint_pos[i] = joint_pos
+
+        self.default_joint_vel = np.zeros(self.ros_node.NUM_JOINTS, dtype=np.float32)
+        for joint_name_expr, joint_vel in self.cfg["scene"]["robot"]["init_state"]["joint_vel"].items():
+            for i in range(self.BODY_DOF):
+                name = self.ros_node.sim_joint_names[i]
+                if re.search(joint_name_expr, name):
+                    self.default_joint_vel[i] = joint_vel
+
+        self._p_gains = np.zeros(self.ros_node.NUM_JOINTS, dtype=np.float32)
+        self._d_gains = np.zeros(self.ros_node.NUM_JOINTS, dtype=np.float32)
+        for actuator_config in self.cfg["scene"]["robot"]["actuators"].values():
+            for i in range(self.BODY_DOF):
+                name = self.ros_node.sim_joint_names[i]
+                for joint_name_expr in actuator_config["joint_names_expr"]:
+                    if not re.search(joint_name_expr, name):
+                        continue
+                    if isinstance(actuator_config["stiffness"], dict):
+                        for key, value in actuator_config["stiffness"].items():
+                            if re.search(key, name):
+                                self._p_gains[i] = value
+                    else:
+                        self._p_gains[i] = actuator_config["stiffness"]
+                    if isinstance(actuator_config["damping"], dict):
+                        for key, value in actuator_config["damping"].items():
+                            if re.search(key, name):
+                                self._d_gains[i] = value
+                    else:
+                        self._d_gains[i] = actuator_config["damping"]
+
+        self._action_scale = np.zeros(self.ros_node.NUM_ACTIONS, dtype=np.float32)
+        self._action_offset = self.default_joint_pos.copy()
+        action_config = self.cfg["actions"]["joint_pos"]
+        use_default_offset = action_config.get("use_default_offset", True)
+        offset = action_config.get("offset", 0.0)
+        scale = action_config.get("scale", 1.0)
+        for i in range(self.BODY_DOF):
+            name = self.ros_node.sim_joint_names[i]
+            for joint_name_expr in action_config["joint_names"]:
+                if not re.search(joint_name_expr, name):
+                    continue
+                self._action_scale[i] = self._get_config_value_for_joint(scale, name, joint_name_expr)
+                if not use_default_offset:
+                    self._action_offset[i] = self._get_config_value_for_joint(offset, name, joint_name_expr)
+                break
+
+    def _apply_head_defaults(self):
+        if self.ros_node.NUM_ACTIONS <= self.BODY_DOF:
+            return
+        head_default = robot_cfgs.G1_31Dof_TorsoBase.head_default_joint_pos
+        self.default_joint_pos[self._head_joint_ids] = head_default[: len(self._head_joint_ids)]
+        self._action_offset[self._head_joint_ids] = head_default[: len(self._head_joint_ids)]
+        self._action_scale[self._head_joint_ids] = 0.0
+
+    def _get_base_velocity_obs(self):
+        x_vel = self.ros_node.joy_stick_data.ly * self.x_vel_scale
+        y_vel = -self.ros_node.joy_stick_data.lx * self.y_vel_scale
+        yaw_vel = -self.ros_node.joy_stick_data.rx * self.yaw_vel_scale
+        self.xyyaw_command = np.array([x_vel, y_vel, yaw_vel], dtype=np.float32)
+        return self.xyyaw_command
+
+    def _get_joint_pos_obs(self):
+        return self.ros_node.joint_pos_[self._body_joint_ids]
+
+    def _get_joint_vel_obs(self):
+        return self.ros_node.joint_vel_[self._body_joint_ids]
+
+    def _get_joint_pos_rel_obs(self):
+        return self.ros_node.joint_pos_[self._body_joint_ids] - self.default_joint_pos[self._body_joint_ids]
+
+    def _get_joint_vel_rel_obs(self):
+        return self.ros_node.joint_vel_[self._body_joint_ids] - self.default_joint_vel[self._body_joint_ids]
+
+    def _get_last_action_obs(self):
+        return np.asarray(self.ros_node.action, dtype=np.float32)[self._body_joint_ids]
+
+    def step(self):
+        proprio_obs = []
+        for proprio_obs_name in self.proprio_obs_names:
+            obs_term_value = self._get_single_obs_term(proprio_obs_name)
+            proprio_obs.append(np.reshape(obs_term_value, (1, -1)).astype(np.float32))
+        proprio_obs = np.concatenate(proprio_obs, axis=-1)
+
+        depth_obs = (
+            self._get_single_obs_term(self.depth_obs_names[0])
+            .reshape(1, -1, self.depth_height, self.depth_width)
+            .astype(np.float32)
+        )
+        depth_image_output = self.ort_sessions["depth_encoder"].run(
+            None, {self.ort_sessions["depth_encoder"].get_inputs()[0].name: depth_obs}
+        )[0]
+        actor_input = np.concatenate([proprio_obs, depth_image_output], axis=1)
+        actor_input_name = self.ort_sessions["actor"].get_inputs()[0].name
+        body_action = self.ort_sessions["actor"].run(None, {actor_input_name: actor_input})[0].reshape(-1)
+
+        full_action = np.zeros(self.ros_node.NUM_ACTIONS, dtype=np.float32)
+        full_action[self._body_joint_ids] = body_action[: self.BODY_DOF]
+        return full_action, False
