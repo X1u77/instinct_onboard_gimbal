@@ -8,7 +8,8 @@ from sensor_msgs.msg import JointState
 from tf2_ros import TransformBroadcaster
 
 from instinct_onboard.agents.base import ColdStartAgent
-from instinct_onboard.agents.parkour_agent import ParkourAgent
+from instinct_onboard.agents.parkour_agent import Body29DepthOn31Agent, ParkourAgent
+from instinct_onboard.agents.walk_agent import Body29ActorOn31Agent
 from instinct_onboard.ros_nodes.realsense import UnitreeRsCameraNode
 
 MAIN_LOOP_FREQUENCY_CHECK_INTERVAL = 500
@@ -72,19 +73,41 @@ class G1ThreePolicyNode(UnitreeRsCameraNode):
         if self.current_agent_name == "cold_start":
             done = self._step_current_agent()
             if done:
-                self.available_agents["parkour"].set_speed_scale(self.current_speed_scale)
-                self.current_agent_name = "parkour"
-                self.available_agents[self.current_agent_name].reset()
                 self.get_logger().info(
-                    "ColdStartAgent done. Entering 31dof parkour policy. Press 'R1' for scale=0.0, 'L1' for scale=0.5."
+                    "ColdStartAgent done. Press 'R1' for 29dof stand, 'A' for 29dof walk, 'L1' for 31dof parkour.",
+                    throttle_duration_sec=10.0,
                 )
+            if done and self.joy_stick_data.R1:
+                self._switch_to("stand", "R1 button pressed, switching to 29dof stand.")
+            elif done and self.joy_stick_data.A:
+                self._switch_to("walk", "A button pressed, switching to 29dof walk.")
+            elif done and self.joy_stick_data.L1:
+                self._switch_to("parkour", "L1 button pressed, switching to 31dof parkour.")
+
+        elif self.current_agent_name == "stand":
+            self._step_current_agent()
+            if self.joy_stick_data.R1:
+                self._switch_to("stand", "R1 button pressed, switching to 29dof stand.")
+            elif self.joy_stick_data.A:
+                self._switch_to("walk", "A button pressed, switching to 29dof walk.")
+            elif self.joy_stick_data.L1:
+                self._switch_to("parkour", "L1 button pressed, switching to 31dof parkour.")
+
+        elif self.current_agent_name == "walk":
+            self._step_current_agent()
+            if self.joy_stick_data.R1:
+                self._switch_to("stand", "R1 button pressed, switching to 29dof stand.")
+            elif self.joy_stick_data.A:
+                self._switch_to("walk", "A button pressed, switching to 29dof walk.")
+            elif self.joy_stick_data.L1:
+                self._switch_to("parkour", "L1 button pressed, switching to 31dof parkour.")
 
         elif self.current_agent_name == "parkour":
             self._step_current_agent()
             if self.joy_stick_data.R1:
-                self._set_speed_scale(0.0, "R1 button pressed, setting speed_scale=0.0.")
-            elif self.joy_stick_data.L1:
-                self._set_speed_scale(0.5, "L1 button pressed, setting speed_scale=0.5.")
+                self._switch_to("stand", "R1 button pressed, switching to 29dof stand.")
+            elif self.joy_stick_data.A:
+                self._switch_to("walk", "A button pressed, switching to 29dof walk.")
 
         if MAIN_LOOP_FREQUENCY_CHECK_INTERVAL > 1:
             self.main_loop_callback_time_consumptions.put(time.time() - start_time)
@@ -114,7 +137,7 @@ def main(args):
         enable_gimbal=args.gimbal,
         gimbal_serial_port=args.gimbal_port,
         gimbal_pan_range=tuple(np.rad2deg([-1.6, 1.6])),
-        gimbal_tilt_range=tuple(np.rad2deg([0.5, 1.5])),
+        gimbal_tilt_range=(-60.0, 60.0),
     )
 
     parkour_agent = ParkourAgent(
@@ -126,16 +149,27 @@ def main(args):
     )
     parkour_agent.set_speed_scale(0.0)
 
+    stand_agent = Body29DepthOn31Agent(
+        logdir=args.stand_logdir,
+        ros_node=node,
+    )
+    walk_agent = Body29ActorOn31Agent(
+        logdir=args.walk_logdir,
+        ros_node=node,
+    )
+
+    node.register_agent("stand", stand_agent)
+    node.register_agent("walk", walk_agent)
     node.register_agent("parkour", parkour_agent)
 
     cold_start_agent = ColdStartAgent(
         startup_step_size=args.startup_step_size,
         ros_node=node,
-        joint_target_pos=parkour_agent.default_joint_pos,
-        action_scale=parkour_agent.action_scale,
-        action_offset=parkour_agent.action_offset,
-        p_gains=parkour_agent.p_gains * args.kpkd_factor,
-        d_gains=parkour_agent.d_gains * args.kpkd_factor,
+        joint_target_pos=stand_agent.default_joint_pos,
+        action_scale=stand_agent.action_scale,
+        action_offset=stand_agent.action_offset,
+        p_gains=stand_agent.p_gains * args.kpkd_factor,
+        d_gains=stand_agent.d_gains * args.kpkd_factor,
     )
     node.register_agent("cold_start", cold_start_agent)
 
@@ -157,7 +191,9 @@ def main(args):
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="G1 single-policy deployment node with discrete speed scales")
+    parser = argparse.ArgumentParser(description="G1 deployment node with 29dof stand, 29dof walk and 31dof parkour")
+    parser.add_argument("--stand_logdir", type=str, help="Directory to load the 29dof stand agent from")
+    parser.add_argument("--walk_logdir", type=str, help="Directory to load the 29dof walk agent from")
     parser.add_argument("--logdir", type=str, help="Directory to load the 31dof parkour agent from")
     parser.add_argument(
         "--startup_step_size",

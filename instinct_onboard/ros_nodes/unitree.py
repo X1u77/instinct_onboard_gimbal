@@ -43,9 +43,16 @@ class UnitreeNode(RealNode):
         self._gimbal_lock = threading.Lock()
         self._gimbal_reader_stop = threading.Event()
         self._gimbal_reader_thread = None
+        self._gimbal_writer_stop = threading.Event()
+        self._gimbal_writer_thread = None
+        self._gimbal_target_cmd_deg = None
         self._gimbal_joint_pos = np.zeros(2, dtype=np.float32)
         self._gimbal_joint_vel = np.zeros(2, dtype=np.float32)
         self._gimbal_last_read_time = 0.0
+        self._gimbal_last_cmd_deg = None
+        self._gimbal_last_cmd_time = 0.0
+        self._gimbal_cmd_min_delta_deg = 0.5
+        self._gimbal_cmd_keepalive_interval = 0.5
         # ROS topic names
         self.low_state_topic = low_state_topic
         self.low_cmd_topic = (
@@ -103,6 +110,7 @@ class UnitreeNode(RealNode):
                         f"pan servo={self.gimbal_pan_servo_id}, tilt servo={self.gimbal_tilt_servo_id}"
                     )
                     self._start_gimbal_reader()
+                    self._start_gimbal_writer()
                 else:
                     self.get_logger().error(f"Failed to connect gimbal on {self.gimbal_serial_port}")
                     self.gimbal = None
@@ -161,6 +169,58 @@ class UnitreeNode(RealNode):
         if self._gimbal_reader_thread is not None:
             self._gimbal_reader_thread.join(timeout=0.2)
             self._gimbal_reader_thread = None
+
+    def _start_gimbal_writer(self):
+        """Write UART servo commands in the background so body LowCmd is never blocked."""
+        if self.gimbal is None or self.dryrun:
+            return
+        if self._gimbal_writer_thread is not None and self._gimbal_writer_thread.is_alive():
+            return
+        self._gimbal_writer_stop.clear()
+        self._gimbal_writer_thread = threading.Thread(
+            target=self._gimbal_writer_loop,
+            name="gimbal-writer",
+            daemon=True,
+        )
+        self._gimbal_writer_thread.start()
+
+    def _gimbal_writer_loop(self):
+        writer_period_s = 0.5
+        while not self._gimbal_writer_stop.is_set():
+            self._write_latest_gimbal_cmd()
+            time.sleep(writer_period_s)
+
+    def _write_latest_gimbal_cmd(self):
+        if self.gimbal is None:
+            return
+        with self._gimbal_lock:
+            if self._gimbal_target_cmd_deg is None:
+                return
+            cmd_deg = self._gimbal_target_cmd_deg.copy()
+
+        try:
+            now = time.time()
+            if self._gimbal_last_cmd_deg is not None:
+                max_delta = float(np.max(np.abs(cmd_deg - self._gimbal_last_cmd_deg)))
+                if (
+                    max_delta < self._gimbal_cmd_min_delta_deg
+                    and now - self._gimbal_last_cmd_time < self._gimbal_cmd_keepalive_interval
+                ):
+                    return
+            self.gimbal.set_gimbal_angle(
+                pan_degrees=float(cmd_deg[0]),
+                tilt_degrees=float(cmd_deg[1]),
+            )
+            self._gimbal_last_cmd_deg = cmd_deg
+            self._gimbal_last_cmd_time = now
+        except Exception as e:
+            self.get_logger().warn(f"Failed to send gimbal command: {e}")
+
+    def _stop_gimbal_writer(self):
+        self._gimbal_writer_stop.set()
+        if self._gimbal_writer_thread is not None:
+            self._gimbal_writer_thread.join(timeout=0.2)
+            self._gimbal_writer_thread = None
 
     def start_ros_handlers(self):
         """After initializing the env and policy, register ros related callbacks and topics"""
@@ -391,17 +451,10 @@ class UnitreeNode(RealNode):
         with self._gimbal_lock:
             self._gimbal_joint_pos[:] = [head_yaw_sim, head_pitch_sim]
             self._gimbal_joint_vel[:] = 0.0
-
-        if self.gimbal is None:
-            return
-
-        try:
-            self.gimbal.set_gimbal_angle(
-                pan_degrees=head_yaw_servo_deg,
-                tilt_degrees=head_pitch_servo_deg,
+            self._gimbal_target_cmd_deg = np.array(
+                [head_yaw_servo_deg, head_pitch_servo_deg],
+                dtype=np.float32,
             )
-        except Exception as e:
-            self.get_logger().warn(f"Failed to send gimbal command: {e}")
 
     def _turn_off_motors(self):
         """Turn off the motors"""
@@ -417,10 +470,12 @@ class UnitreeNode(RealNode):
         self.low_cmd_publisher.publish(self.low_cmd_buffer)
         # Stop gimbal servos
         if self.gimbal is not None and not self.dryrun:
+            self._stop_gimbal_writer()
             self._stop_gimbal_reader()
             self.gimbal.stop_all()
 
     def destroy_node(self):
+        self._stop_gimbal_writer()
         self._stop_gimbal_reader()
         if self.gimbal is not None and not self.dryrun:
             self.gimbal.disconnect()

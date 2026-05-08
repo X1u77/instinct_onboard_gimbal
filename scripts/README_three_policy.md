@@ -27,7 +27,7 @@ source ~/unitree_ros2/setup_g1_foxy.sh
 export PYTHONPATH=/home/unitree/ros2_numpy:$PYTHONPATH
 
 python scripts/g1_three_policy.py \
-    --logdir /home/unitree/hmv_deploy/policy \
+    --logdir /home/unitree/hmv_policy \
     --gimbal
 ```
 
@@ -40,7 +40,16 @@ source ~/unitree_ros2/setup_g1_foxy.sh
 export PYTHONPATH=/home/unitree/ros2_numpy:$PYTHONPATH
 
 python scripts/g1_three_policy.py \
-    --logdir /home/unitree/hmv_deploy/policy \
+    --stand_logdir "/home/unitree/29dof_walk" \
+    --logdir "/home/unitree/hmv_policy" \
+    --gimbal \
+    --nodryrun
+
+python scripts/g1_three_policy.py \
+    --stand_logdir "/home/unitree/stand_onboard" \
+    --walk_logdir "/home/unitree/29dof_walk" \
+    --logdir "/home/unitree/hmv_policy" \
+    --gimbal_port /dev/ttyUSB1\
     --gimbal \
     --nodryrun
 ```

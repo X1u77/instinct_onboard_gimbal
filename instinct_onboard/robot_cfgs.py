@@ -299,7 +299,6 @@ class G1_31Dof_TorsoBase:
     NUM_JOINTS = 31
     NUM_ACTIONS = 31
     head_default_joint_pos = np.array([0.0, 0.8726646259971648], dtype=np.float32)
-
     # sim_index -> real Unitree motor index
     # -1 means controlled by UART servo, not Unitree LowState
     joint_map = [

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 
 import numpy as np
 import onnxruntime as ort
@@ -93,6 +94,59 @@ class Body29ActorOn31Agent(WalkAgent):
         self._body_joint_ids = np.arange(self.BODY_DOF, dtype=np.int64)
         self._head_joint_ids = np.arange(self.BODY_DOF, self.ros_node.NUM_ACTIONS, dtype=np.int64)
         self._apply_head_defaults()
+
+    def _parse_action_config(self):
+        """Parse 29-DoF action config while leaving 31-DoF head joints fixed."""
+        self.default_joint_pos = np.zeros(self.ros_node.NUM_JOINTS, dtype=np.float32)
+        for joint_name_expr, joint_pos in self.cfg["scene"]["robot"]["init_state"]["joint_pos"].items():
+            for i in range(self.BODY_DOF):
+                name = self.ros_node.sim_joint_names[i]
+                if re.search(joint_name_expr, name):
+                    self.default_joint_pos[i] = joint_pos
+
+        self.default_joint_vel = np.zeros(self.ros_node.NUM_JOINTS, dtype=np.float32)
+        for joint_name_expr, joint_vel in self.cfg["scene"]["robot"]["init_state"]["joint_vel"].items():
+            for i in range(self.BODY_DOF):
+                name = self.ros_node.sim_joint_names[i]
+                if re.search(joint_name_expr, name):
+                    self.default_joint_vel[i] = joint_vel
+
+        self._p_gains = np.zeros(self.ros_node.NUM_JOINTS, dtype=np.float32)
+        self._d_gains = np.zeros(self.ros_node.NUM_JOINTS, dtype=np.float32)
+        for actuator_config in self.cfg["scene"]["robot"]["actuators"].values():
+            for i in range(self.BODY_DOF):
+                name = self.ros_node.sim_joint_names[i]
+                for joint_name_expr in actuator_config["joint_names_expr"]:
+                    if not re.search(joint_name_expr, name):
+                        continue
+                    if isinstance(actuator_config["stiffness"], dict):
+                        for key, value in actuator_config["stiffness"].items():
+                            if re.search(key, name):
+                                self._p_gains[i] = value
+                    else:
+                        self._p_gains[i] = actuator_config["stiffness"]
+                    if isinstance(actuator_config["damping"], dict):
+                        for key, value in actuator_config["damping"].items():
+                            if re.search(key, name):
+                                self._d_gains[i] = value
+                    else:
+                        self._d_gains[i] = actuator_config["damping"]
+
+        self._action_scale = np.zeros(self.ros_node.NUM_ACTIONS, dtype=np.float32)
+        self._action_offset = self.default_joint_pos.copy()
+        action_config = self.cfg["actions"]["joint_pos"]
+        use_default_offset = action_config.get("use_default_offset", True)
+        offset = action_config.get("offset", 0.0)
+        scale = action_config.get("scale", 1.0)
+        for i in range(self.BODY_DOF):
+            name = self.ros_node.sim_joint_names[i]
+            for joint_name_expr in action_config["joint_names"]:
+                if not re.search(joint_name_expr, name):
+                    continue
+                self._action_scale[i] = self._get_config_value_for_joint(scale, name, joint_name_expr)
+                if not use_default_offset:
+                    self._action_offset[i] = self._get_config_value_for_joint(offset, name, joint_name_expr)
+                break
 
     def _apply_head_defaults(self):
         if self.ros_node.NUM_ACTIONS <= self.BODY_DOF:
