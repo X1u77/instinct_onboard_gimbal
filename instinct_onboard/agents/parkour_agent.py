@@ -559,10 +559,10 @@ class ParkourAgent(OnboardAgent):
                             self._zero_action_joints[i] = 1.0
 
     def _parse_depth_image_config(self):
-        self.output_resolution = [
-            self.cfg["scene"]["camera"]["pattern_cfg"]["width"],
-            self.cfg["scene"]["camera"]["pattern_cfg"]["height"],
-        ]
+        self.output_resolution = (
+            int(self.cfg["scene"]["camera"]["pattern_cfg"]["width"]),
+            int(self.cfg["scene"]["camera"]["pattern_cfg"]["height"]),
+        )
 
         self.depth_range = self.cfg["scene"]["camera"]["noise_pipeline"]["depth_normalization"]["depth_range"]
 
