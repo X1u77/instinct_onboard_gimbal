@@ -43,14 +43,6 @@ class G1ThreePolicyNode(UnitreeRsCameraNode):
         self.current_agent_name = agent_name
         self.available_agents[self.current_agent_name].reset()
 
-    def _set_speed_scale(self, speed_scale: float, reason: str):
-        speed_scale = float(speed_scale)
-        if abs(self.current_speed_scale - speed_scale) < 1e-6:
-            return
-        self.current_speed_scale = speed_scale
-        self.available_agents["parkour"].set_speed_scale(speed_scale)
-        self.get_logger().info(reason)
-
     def _step_current_agent(self):
         action, done = self.available_agents[self.current_agent_name].step()
         self.send_action(

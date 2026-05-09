@@ -185,7 +185,7 @@ class UnitreeNode(RealNode):
         self._gimbal_writer_thread.start()
 
     def _gimbal_writer_loop(self):
-        writer_period_s = 0.5
+        writer_period_s = 0.05
         while not self._gimbal_writer_stop.is_set():
             self._write_latest_gimbal_cmd()
             time.sleep(writer_period_s)
