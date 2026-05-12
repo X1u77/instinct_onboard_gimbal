@@ -499,6 +499,7 @@ class ParkourAgent(OnboardAgent):
         depth_vis: bool = True,
         pointcloud_vis: bool = True,
         initial_speed_scale: float = 0.0,
+        debug_policy_io: bool = False,
         lin_vel_deadband=0.5,
         lin_vel_range=[0.5, 0.5],
         ang_vel_deadband=0.15,
@@ -507,6 +508,8 @@ class ParkourAgent(OnboardAgent):
         super().__init__(logdir, ros_node)
         self.ort_sessions = dict()
         self.speed_scale = float(initial_speed_scale)
+        self.debug_policy_io = debug_policy_io
+        self._last_policy_io_log_time = 0.0
         self.lin_vel_deadband = lin_vel_deadband
         self.ang_vel_deadband = ang_vel_deadband
         self.cmd_px_range = lin_vel_range
@@ -747,8 +750,44 @@ class ParkourAgent(OnboardAgent):
         full_action = np.zeros(self.ros_node.NUM_ACTIONS, dtype=np.float32)
         full_action[mask] = action
         full_action = self._clip_camera_yaw_pitch_action(full_action)
+        self._debug_policy_io(full_action)
 
         return full_action, False
+
+    def _debug_policy_io(self, action: np.ndarray):
+        if not self.debug_policy_io:
+            return
+        now = time.time()
+        if now - self._last_policy_io_log_time < 0.5:
+            return
+        self._last_policy_io_log_time = now
+
+        target_joint_pos = action * self.action_scale + self.action_offset
+        joint_indices = {
+            "l_knee": "left_knee_joint",
+            "r_knee": "right_knee_joint",
+            "l_ankle_p": "left_ankle_pitch_joint",
+            "r_ankle_p": "right_ankle_pitch_joint",
+            "head_yaw": "head_yaw_joint",
+            "head_pitch": "head_pitch_joint",
+        }
+        target_summary = []
+        action_summary = []
+        for label, joint_name in joint_indices.items():
+            if joint_name not in self.ros_node.sim_joint_names:
+                continue
+            joint_id = self.ros_node.sim_joint_names.index(joint_name)
+            target_summary.append(f"{label}={target_joint_pos[joint_id]:+.3f}")
+            action_summary.append(f"{label}={action[joint_id]:+.3f}")
+        self.ros_node.get_logger().info(
+            "parkour_io "
+            f"ly={float(self.ros_node.joy_stick_data.ly):+.3f} "
+            f"scale={float(self.speed_scale):+.3f} "
+            f"raw_max={float(np.max(np.abs(action))):.3f} "
+            f"target_max={float(np.max(np.abs(target_joint_pos))):.3f} "
+            f"raw[{', '.join(action_summary)}] "
+            f"target[{', '.join(target_summary)}]",
+        )
 
     """
     Agent specific observation functions for Parkour Agent.

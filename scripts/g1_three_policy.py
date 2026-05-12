@@ -138,6 +138,7 @@ def main(args):
         depth_vis=args.depth_vis,
         pointcloud_vis=args.pointcloud_vis,
         initial_speed_scale=0.0,
+        debug_policy_io=args.debug_policy_io,
     )
     parkour_agent.set_speed_scale(0.0)
 
@@ -234,6 +235,12 @@ if __name__ == "__main__":
         action="store_true",
         default=False,
         help="Enable debug mode (default: False)",
+    )
+    parser.add_argument(
+        "--debug_policy_io",
+        action="store_true",
+        default=False,
+        help="Log 31dof parkour raw action and scaled joint targets for debugging (default: False)",
     )
 
     args = parser.parse_args()
