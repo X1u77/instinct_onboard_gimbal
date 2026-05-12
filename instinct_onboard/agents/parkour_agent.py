@@ -267,6 +267,15 @@ class Body29DepthOn31Agent(ParkourStandAgent):
 
     BODY_DOF = 29
 
+    @staticmethod
+    def _get_config_value_for_joint_or_default(value, joint_name: str, default):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if re.search(key, joint_name):
+                    return item
+            return default
+        return value
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._head_joint_ids = np.array(
@@ -311,8 +320,12 @@ class Body29DepthOn31Agent(ParkourStandAgent):
                 for joint_name_expr in actuator_config["joint_names_expr"]:
                     if not re.search(joint_name_expr, name):
                         continue
-                    self._p_gains[i] = self._get_config_value_for_joint(actuator_config["stiffness"], name, joint_name_expr)
-                    self._d_gains[i] = self._get_config_value_for_joint(actuator_config["damping"], name, joint_name_expr)
+                    self._p_gains[i] = self._get_config_value_for_joint_or_default(
+                        actuator_config["stiffness"], name, 0.0
+                    )
+                    self._d_gains[i] = self._get_config_value_for_joint_or_default(
+                        actuator_config["damping"], name, 0.0
+                    )
 
         self._action_scale = np.zeros(self.ros_node.NUM_ACTIONS, dtype=np.float32)
         self._action_offset = self.default_joint_pos.copy()
@@ -327,9 +340,9 @@ class Body29DepthOn31Agent(ParkourStandAgent):
                 for joint_name_expr in action_config["joint_names"]:
                     if not re.search(joint_name_expr, name):
                         continue
-                    self._action_scale[i] = self._get_config_value_for_joint(scale, name, joint_name_expr)
+                    self._action_scale[i] = self._get_config_value_for_joint_or_default(scale, name, 1.0)
                     if not use_default_offset:
-                        self._action_offset[i] = self._get_config_value_for_joint(offset, name, joint_name_expr)
+                        self._action_offset[i] = self._get_config_value_for_joint_or_default(offset, name, 0.0)
                     break
 
     def _apply_head_defaults(self):
