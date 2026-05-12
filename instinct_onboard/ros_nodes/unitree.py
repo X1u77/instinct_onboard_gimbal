@@ -53,6 +53,8 @@ class UnitreeNode(RealNode):
         self._gimbal_last_cmd_time = 0.0
         self._gimbal_cmd_min_delta_deg = 0.5
         self._gimbal_cmd_keepalive_interval = 0.5
+        self._head_yaw_sim_idx = None
+        self._head_pitch_sim_idx = None
         # ROS topic names
         self.low_state_topic = low_state_topic
         self.low_cmd_topic = (
@@ -71,6 +73,9 @@ class UnitreeNode(RealNode):
         self.joint_signs = getattr(robot_cfgs, self.robot_class_name).joint_signs
         self.turn_on_motor_mode = getattr(robot_cfgs, self.robot_class_name).turn_on_motor_mode
         self.mode_pr = getattr(robot_cfgs, self.robot_class_name).mode_pr
+        if "head_yaw_joint" in self.sim_joint_names and "head_pitch_joint" in self.sim_joint_names:
+            self._head_yaw_sim_idx = self.sim_joint_names.index("head_yaw_joint")
+            self._head_pitch_sim_idx = self.sim_joint_names.index("head_pitch_joint")
         self._gimbal_joint_pos[:] = getattr(
             getattr(robot_cfgs, self.robot_class_name),
             "head_default_joint_pos",
@@ -150,8 +155,8 @@ class UnitreeNode(RealNode):
             now = time.time()
             new_pos = np.array(
                 [
-                    np.deg2rad(pan_deg) * self.joint_signs[29],
-                    np.deg2rad(tilt_deg) * self.joint_signs[30],
+                    np.deg2rad(pan_deg) * self.joint_signs[self._head_yaw_sim_idx],
+                    np.deg2rad(tilt_deg) * self.joint_signs[self._head_pitch_sim_idx],
                 ],
                 dtype=np.float32,
             )
@@ -307,7 +312,12 @@ class UnitreeNode(RealNode):
         sim_idx 29 -> head_yaw, sim_idx 30 -> head_pitch.
         Returns (position, velocity) in simulation coordinate system.
         """
-        head_idx = sim_idx - 29
+        if sim_idx == self._head_yaw_sim_idx:
+            head_idx = 0
+        elif sim_idx == self._head_pitch_sim_idx:
+            head_idx = 1
+        else:
+            return 0.0, 0.0
         with self._gimbal_lock:
             return float(self._gimbal_joint_pos[head_idx]), float(self._gimbal_joint_vel[head_idx])
 
@@ -446,8 +456,8 @@ class UnitreeNode(RealNode):
             self.get_logger().error("Robot coordinates action contain NaN, Skip sending the action to the robot.")
             return
 
-        # Unitree motors (sim_index 0-28)
-        for sim_idx in range(min(self.NUM_JOINTS, 29)):
+        # Unitree motors only. Head gimbal joints have joint_map=-1 and are sent below.
+        for sim_idx in range(self.NUM_JOINTS):
             real_idx = self.joint_map[sim_idx]
             if real_idx >= 0:
                 if not self.dryrun:
@@ -459,7 +469,7 @@ class UnitreeNode(RealNode):
                 self.low_cmd_buffer.motor_cmd[real_idx].kd = d_gains[sim_idx].item()
 
         # Head gimbal joints (sim_index 29-30), only present in the 31-DOF config.
-        if self.NUM_JOINTS >= 31 and len(target_joint_pos) >= 31:
+        if self._head_yaw_sim_idx is not None and self._head_pitch_sim_idx is not None:
             self._publish_gimbal_cmd(target_joint_pos)
 
         self.low_cmd_buffer.crc = get_crc(self.low_cmd_buffer)
@@ -469,18 +479,14 @@ class UnitreeNode(RealNode):
         """Send head joint commands to the gimbal servo controller.
         Converts simulation coordinates (radians) to servo coordinates (degrees).
         """
-        if self.NUM_JOINTS < 31 or len(target_joint_pos) < 31:
+        if self._head_yaw_sim_idx is None or self._head_pitch_sim_idx is None:
             return
 
-        # head_yaw (sim_idx=29): sim radians -> servo degrees
-        # joint_signs[29] = -1 (sim=left+ -> servo=right+)
-        head_yaw_sim = target_joint_pos[29]
-        head_yaw_servo_deg = np.rad2deg(head_yaw_sim) * self.joint_signs[29]
+        head_yaw_sim = target_joint_pos[self._head_yaw_sim_idx]
+        head_yaw_servo_deg = np.rad2deg(head_yaw_sim) * self.joint_signs[self._head_yaw_sim_idx]
 
-        # head_pitch (sim_idx=30): sim radians -> servo degrees
-        # joint_signs[30] = +1 (same direction)
-        head_pitch_sim = target_joint_pos[30]
-        head_pitch_servo_deg = np.rad2deg(head_pitch_sim) * self.joint_signs[30]
+        head_pitch_sim = target_joint_pos[self._head_pitch_sim_idx]
+        head_pitch_servo_deg = np.rad2deg(head_pitch_sim) * self.joint_signs[self._head_pitch_sim_idx]
 
         with self._gimbal_lock:
             self._gimbal_joint_pos[:] = [head_yaw_sim, head_pitch_sim]
@@ -492,8 +498,10 @@ class UnitreeNode(RealNode):
 
     def _turn_off_motors(self):
         """Turn off the motors"""
-        for sim_idx in range(min(self.NUM_JOINTS, 29)):
+        for sim_idx in range(self.NUM_JOINTS):
             real_idx = self.joint_map[sim_idx]
+            if real_idx < 0:
+                continue
             self.low_cmd_buffer.motor_cmd[real_idx].mode = 0x00
             self.low_cmd_buffer.motor_cmd[real_idx].q = 0.0
             self.low_cmd_buffer.motor_cmd[real_idx].dq = 0.0

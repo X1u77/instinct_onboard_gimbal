@@ -269,8 +269,21 @@ class Body29DepthOn31Agent(ParkourStandAgent):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._body_joint_ids = np.arange(self.BODY_DOF, dtype=np.int64)
-        self._head_joint_ids = np.arange(self.BODY_DOF, self.ros_node.NUM_ACTIONS, dtype=np.int64)
+        self._head_joint_ids = np.array(
+            [
+                self.ros_node.sim_joint_names.index("head_yaw_joint"),
+                self.ros_node.sim_joint_names.index("head_pitch_joint"),
+            ],
+            dtype=np.int64,
+        )
+        self._body_joint_ids = np.array(
+            [
+                i
+                for i, joint_name in enumerate(self.ros_node.sim_joint_names)
+                if joint_name not in ("head_yaw_joint", "head_pitch_joint")
+            ],
+            dtype=np.int64,
+        )
         self._apply_head_defaults()
 
     def _parse_action_config(self):

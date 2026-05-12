@@ -581,3 +581,104 @@ class G1_31Dof_TorsoBase:
         "parent_frame": "torso_link",
         "child_frame": "realsense_depth_link",
     }
+
+
+def _reorder_g1_31dof_to_training_urdf_order():
+    """Match the 31-DoF deployment order to the parkour training URDF order."""
+    ordered_names = [
+        "left_hip_pitch_joint",
+        "left_hip_roll_joint",
+        "left_hip_yaw_joint",
+        "left_knee_joint",
+        "left_ankle_pitch_joint",
+        "left_ankle_roll_joint",
+        "right_hip_pitch_joint",
+        "right_hip_roll_joint",
+        "right_hip_yaw_joint",
+        "right_knee_joint",
+        "right_ankle_pitch_joint",
+        "right_ankle_roll_joint",
+        "waist_yaw_joint",
+        "waist_roll_joint",
+        "waist_pitch_joint",
+        "head_yaw_joint",
+        "head_pitch_joint",
+        "left_shoulder_pitch_joint",
+        "left_shoulder_roll_joint",
+        "left_shoulder_yaw_joint",
+        "left_elbow_joint",
+        "left_wrist_roll_joint",
+        "left_wrist_pitch_joint",
+        "left_wrist_yaw_joint",
+        "right_shoulder_pitch_joint",
+        "right_shoulder_roll_joint",
+        "right_shoulder_yaw_joint",
+        "right_elbow_joint",
+        "right_wrist_roll_joint",
+        "right_wrist_pitch_joint",
+        "right_wrist_yaw_joint",
+    ]
+    old_names = G1_31Dof_TorsoBase.sim_joint_names
+
+    def by_name(values, name, fallback=None):
+        if name in old_names:
+            return values[old_names.index(name)]
+        return fallback
+
+    G1_31Dof_TorsoBase.sim_joint_names = ordered_names
+    G1_31Dof_TorsoBase.real_joint_names = ordered_names
+    G1_31Dof_TorsoBase.joint_map = [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        -1,
+        -1,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+    ]
+    G1_31Dof_TorsoBase.joint_signs = np.array(
+        [by_name(G1_31Dof_TorsoBase.joint_signs, name, 1.0) for name in ordered_names],
+        dtype=np.float32,
+    )
+    G1_31Dof_TorsoBase.joint_limits_high = np.array(
+        [by_name(G1_31Dof_TorsoBase.joint_limits_high, name, 0.0) for name in ordered_names],
+        dtype=np.float32,
+    )
+    G1_31Dof_TorsoBase.joint_limits_low = np.array(
+        [by_name(G1_31Dof_TorsoBase.joint_limits_low, name, 0.0) for name in ordered_names],
+        dtype=np.float32,
+    )
+    G1_31Dof_TorsoBase.torque_limits = np.array(
+        [by_name(G1_31Dof_TorsoBase.torque_limits, name, 0.0) for name in ordered_names],
+        dtype=np.float32,
+    )
+    G1_31Dof_TorsoBase.turn_on_motor_mode = [
+        0x00 if name in ("head_yaw_joint", "head_pitch_joint") else 0x01 for name in ordered_names
+    ]
+
+
+_reorder_g1_31dof_to_training_urdf_order()
