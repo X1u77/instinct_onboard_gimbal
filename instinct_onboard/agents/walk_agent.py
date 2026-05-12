@@ -98,11 +98,7 @@ class Body29ActorOn31Agent(WalkAgent):
         return value
 
     def _get_body_joint_ids(self):
-        return [
-            i
-            for i, joint_name in enumerate(self.ros_node.sim_joint_names)
-            if joint_name not in ("head_yaw_joint", "head_pitch_joint")
-        ]
+        return [self.ros_node.sim_joint_names.index(name) for name in robot_cfgs.G1_29Dof_TorsoBase.sim_joint_names]
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

@@ -10,6 +10,7 @@ import ros2_numpy as rnp
 import yaml
 from sensor_msgs.msg import Image, PointCloud2
 
+from instinct_onboard import robot_cfgs
 from instinct_onboard.agents.base import OnboardAgent
 from instinct_onboard.ros_nodes.base import RealNode
 from instinct_onboard.utils import CircularBuffer
@@ -277,11 +278,7 @@ class Body29DepthOn31Agent(ParkourStandAgent):
         return value
 
     def _get_body_joint_ids(self):
-        return [
-            i
-            for i, joint_name in enumerate(self.ros_node.sim_joint_names)
-            if joint_name not in ("head_yaw_joint", "head_pitch_joint")
-        ]
+        return [self.ros_node.sim_joint_names.index(name) for name in robot_cfgs.G1_29Dof_TorsoBase.sim_joint_names]
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
