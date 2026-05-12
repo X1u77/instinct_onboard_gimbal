@@ -254,3 +254,97 @@ class ParkourStandAgent(ParkourAgent):
 
     def _get_delayed_visualizable_image_obs(self):
         return np.zeros((len(self.depth_obs_indices), self.depth_height, self.depth_width), dtype=np.float32)
+
+
+class Body29DepthOn31Agent(ParkourStandAgent):
+    """Run a 29-DoF depth policy on the 31-DoF node while holding head joints fixed."""
+
+    BODY_DOF = 29
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._body_joint_ids = np.arange(self.BODY_DOF, dtype=np.int64)
+        self._head_joint_ids = np.arange(self.BODY_DOF, self.ros_node.NUM_ACTIONS, dtype=np.int64)
+        self._apply_head_defaults()
+
+    def _parse_action_config(self):
+        self.default_joint_pos = np.zeros(self.ros_node.NUM_JOINTS, dtype=np.float32)
+        for joint_name_expr, joint_pos in self.cfg["scene"]["robot"]["init_state"]["joint_pos"].items():
+            for i in range(self.BODY_DOF):
+                name = self.ros_node.sim_joint_names[i]
+                if re.search(joint_name_expr, name):
+                    self.default_joint_pos[i] = joint_pos
+
+        self.default_joint_vel = np.zeros(self.ros_node.NUM_JOINTS, dtype=np.float32)
+        for joint_name_expr, joint_vel in self.cfg["scene"]["robot"]["init_state"]["joint_vel"].items():
+            for i in range(self.BODY_DOF):
+                name = self.ros_node.sim_joint_names[i]
+                if re.search(joint_name_expr, name):
+                    self.default_joint_vel[i] = joint_vel
+
+        self._p_gains = np.zeros(self.ros_node.NUM_JOINTS, dtype=np.float32)
+        self._d_gains = np.zeros(self.ros_node.NUM_JOINTS, dtype=np.float32)
+        for actuator_config in self.cfg["scene"]["robot"]["actuators"].values():
+            for i in range(self.BODY_DOF):
+                name = self.ros_node.sim_joint_names[i]
+                for joint_name_expr in actuator_config["joint_names_expr"]:
+                    if not re.search(joint_name_expr, name):
+                        continue
+                    self._p_gains[i] = self._get_config_value_for_joint(actuator_config["stiffness"], name, joint_name_expr)
+                    self._d_gains[i] = self._get_config_value_for_joint(actuator_config["damping"], name, joint_name_expr)
+
+        self._action_scale = np.zeros(self.ros_node.NUM_ACTIONS, dtype=np.float32)
+        self._action_offset = self.default_joint_pos.copy()
+        for action_config in self.cfg["actions"].values():
+            if action_config.get("asset_name") != "robot" or "joint_names" not in action_config:
+                continue
+            use_default_offset = action_config.get("use_default_offset", True)
+            offset = action_config.get("offset", 0.0)
+            scale = action_config.get("scale", 1.0)
+            for i in range(self.BODY_DOF):
+                name = self.ros_node.sim_joint_names[i]
+                for joint_name_expr in action_config["joint_names"]:
+                    if not re.search(joint_name_expr, name):
+                        continue
+                    self._action_scale[i] = self._get_config_value_for_joint(scale, name, joint_name_expr)
+                    if not use_default_offset:
+                        self._action_offset[i] = self._get_config_value_for_joint(offset, name, joint_name_expr)
+                    break
+
+    def _apply_head_defaults(self):
+        if self.ros_node.NUM_ACTIONS <= self.BODY_DOF:
+            return
+        head_default = np.array([0.0, 0.8726646259971648], dtype=np.float32)
+        self.default_joint_pos[self._head_joint_ids] = head_default[: len(self._head_joint_ids)]
+        self._action_offset[self._head_joint_ids] = head_default[: len(self._head_joint_ids)]
+        self._action_scale[self._head_joint_ids] = 0.0
+
+    def _get_base_velocity_cmd_obs(self):
+        return np.zeros(3, dtype=np.float32)
+
+    def _get_base_velocity_obs(self):
+        return self._get_base_velocity_cmd_obs()
+
+    def _get_joint_pos_obs(self):
+        return self.ros_node.joint_pos_[self._body_joint_ids]
+
+    def _get_joint_vel_obs(self):
+        return self.ros_node.joint_vel_[self._body_joint_ids]
+
+    def _get_joint_pos_rel_obs(self):
+        return self.ros_node.joint_pos_[self._body_joint_ids] - self.default_joint_pos[self._body_joint_ids]
+
+    def _get_joint_vel_rel_obs(self):
+        return self.ros_node.joint_vel_[self._body_joint_ids] - self.default_joint_vel[self._body_joint_ids]
+
+    def _get_last_action_obs(self):
+        return np.asarray(self.ros_node.action, dtype=np.float32)[self._body_joint_ids]
+
+    def _get_camera_offset_yaw_pitch_obs(self):
+        return np.zeros(2, dtype=np.float32)
+
+    def step(self):
+        action, done = super().step()
+        full_action = np.zeros(self.ros_node.NUM_ACTIONS, dtype=np.float32)
+        full_action[self._body_joint_ids] = action[: self.BODY_DOF]
+        return full_action, done
