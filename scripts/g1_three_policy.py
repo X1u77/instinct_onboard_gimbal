@@ -129,7 +129,7 @@ def main(args):
         enable_gimbal=args.gimbal,
         gimbal_serial_port=args.gimbal_port,
         gimbal_pan_range=tuple(np.rad2deg([-1.6, 1.6])),
-        gimbal_tilt_range=(-60.0, 60.0),
+        gimbal_tilt_range=(float(np.rad2deg(0.5)), 60.0),
     )
 
     parkour_agent = ParkourAgent(

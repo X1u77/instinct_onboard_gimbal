@@ -549,14 +549,65 @@ class ParkourAgent(OnboardAgent):
 
     def _parse_action_config(self):
         super()._parse_action_config()
+        self._camera_action_joint_ids = None
+        self._camera_action_low = None
+        self._camera_action_high = None
         self._zero_action_joints = np.zeros(self.ros_node.NUM_ACTIONS, dtype=np.float32)
         for action_names, action_config in self.cfg["actions"].items():
+            if "yaw_joint_name" in action_config and "pitch_joint_name" in action_config:
+                yaw_id = self.ros_node.sim_joint_names.index(action_config["yaw_joint_name"])
+                pitch_id = self.ros_node.sim_joint_names.index(action_config["pitch_joint_name"])
+                self._camera_action_joint_ids = np.array([yaw_id, pitch_id], dtype=np.int64)
+                self._camera_action_low = np.array(
+                    [action_config["yaw_range"][0], action_config["pitch_range"][0]],
+                    dtype=np.float32,
+                )
+                self._camera_action_high = np.array(
+                    [action_config["yaw_range"][1], action_config["pitch_range"][1]],
+                    dtype=np.float32,
+                )
+                gimbal_low, gimbal_high = self._get_gimbal_action_limits()
+                if gimbal_low is not None and gimbal_high is not None:
+                    self._camera_action_low = np.maximum(self._camera_action_low, gimbal_low)
+                    self._camera_action_high = np.minimum(self._camera_action_high, gimbal_high)
             for i in range(self.ros_node.NUM_JOINTS):
                 name = self.ros_node.sim_joint_names[i]
                 if "default_joint_names" in action_config:
                     for _, joint_name_expr in enumerate(action_config["default_joint_names"]):
                         if re.search(joint_name_expr, name):
                             self._zero_action_joints[i] = 1.0
+
+    def _get_gimbal_action_limits(self):
+        if not hasattr(self.ros_node, "gimbal_pan_range") or not hasattr(self.ros_node, "gimbal_tilt_range"):
+            return None, None
+
+        def servo_deg_range_to_sim_rad(range_deg, sign):
+            values = np.deg2rad(np.asarray(range_deg, dtype=np.float32)) * float(sign)
+            return float(np.min(values)), float(np.max(values))
+
+        yaw_low, yaw_high = servo_deg_range_to_sim_rad(self.ros_node.gimbal_pan_range, self.ros_node.joint_signs[29])
+        pitch_low, pitch_high = servo_deg_range_to_sim_rad(
+            self.ros_node.gimbal_tilt_range,
+            self.ros_node.joint_signs[30],
+        )
+        return (
+            np.array([yaw_low, pitch_low], dtype=np.float32),
+            np.array([yaw_high, pitch_high], dtype=np.float32),
+        )
+
+    def _clip_camera_yaw_pitch_action(self, action: np.ndarray) -> np.ndarray:
+        """Match CameraYawPitchActionCfg target clipping used during simulation."""
+        if self._camera_action_joint_ids is None:
+            return action
+        joint_ids = self._camera_action_joint_ids
+        target = action[joint_ids] * self._action_scale[joint_ids] + self._action_offset[joint_ids]
+        target = np.clip(target, self._camera_action_low, self._camera_action_high)
+        scale = self._action_scale[joint_ids]
+        nonzero = np.abs(scale) > 1e-8
+        action[joint_ids[nonzero]] = (
+            (target[nonzero] - self._action_offset[joint_ids[nonzero]]) / scale[nonzero]
+        )
+        return action
 
     def _parse_depth_image_config(self):
         self.output_resolution = (
@@ -695,6 +746,7 @@ class ParkourAgent(OnboardAgent):
         mask = (self._zero_action_joints == 0).astype(bool)
         full_action = np.zeros(self.ros_node.NUM_ACTIONS, dtype=np.float32)
         full_action[mask] = action
+        full_action = self._clip_camera_yaw_pitch_action(full_action)
 
         return full_action, False
 
