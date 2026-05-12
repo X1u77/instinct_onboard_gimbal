@@ -405,7 +405,22 @@ class Body29DepthOn31Agent(ParkourStandAgent):
         return
 
     def step(self):
-        action, done = super().step()
+        proprio_obs = []
+        for obs_name in self.proprio_obs_names:
+            proprio_obs.append(self._get_single_obs_term(obs_name).reshape(1, -1).astype(np.float32))
+        proprio_obs = np.concatenate(proprio_obs, axis=-1)
+
+        depth_obs = (
+            self._get_single_obs_term(self.depth_obs_names[0])
+            .reshape(1, -1, self.depth_height, self.depth_width)
+            .astype(np.float32)
+        )
+        depth_input_name = self.ort_sessions["depth_encoder"].get_inputs()[0].name
+        depth_embedding = self.ort_sessions["depth_encoder"].run(None, {depth_input_name: depth_obs})[0]
+        actor_input = np.concatenate([proprio_obs, depth_embedding], axis=1)
+        actor_input_name = self.ort_sessions["actor"].get_inputs()[0].name
+        action = self.ort_sessions["actor"].run(None, {actor_input_name: actor_input})[0].reshape(-1)
+
         full_action = np.zeros(self.ros_node.NUM_ACTIONS, dtype=np.float32)
         full_action[self._body_joint_ids] = action[: self.BODY_DOF]
-        return full_action, done
+        return full_action, False
