@@ -110,7 +110,7 @@ class OnboardAgent(ABC):
                     self._action_offset[i] = self._get_config_value_for_joint(offset, name, joint_name_expr)
 
     def _parse_camera_yaw_pitch_action(self, action_config: dict):
-        """Parse the custom CameraYawPitchActionCfg used by the parkour policy.
+        """Parse the custom camera yaw/pitch action config used by gimbal-enabled policies.
 
         Simulation interprets these two raw actions as:
             target = raw * scale + offset + default_joint_pos  (when use_default_offset=True)

@@ -35,12 +35,11 @@ class WalkAgent(OnboardAgent):
     def _load_models(self):
         """Load the ONNX model for the agent."""
         # load ONNX models
-        ort_execution_providers = ort.get_available_providers()
-        actor_path = os.path.join(self.logdir, "exported", "actor.onnx")
-        self.ort_sessions["actor"] = ort.InferenceSession(actor_path, providers=ort_execution_providers)
+        actor_path = self._resolve_logdir_path("exported", "actor.onnx")
+        self.ort_sessions["actor"] = ort.InferenceSession(actor_path, providers=["CPUExecutionProvider"])
         print(f"Loaded ONNX models from {self.logdir}")
         # optionally load the normalizer if it exists
-        normalizer_path = os.path.join(self.logdir, "exported", "policy_normalizer.npz")
+        normalizer_path = self._resolve_logdir_path("exported", "policy_normalizer.npz")
         if os.path.exists(normalizer_path):
             self.normalizer = Normalizer(load_path=normalizer_path)
         else:
@@ -178,3 +177,13 @@ class Body29ActorOn31Agent(WalkAgent):
         full_action = np.zeros(self.ros_node.NUM_ACTIONS, dtype=np.float32)
         full_action[self._body_joint_ids] = body_action[: self.BODY_DOF]
         return full_action, done
+
+
+class Body29StandOn31Agent(Body29ActorOn31Agent):
+    """Run a 29-DoF stand policy on a 31-DoF node with zero velocity command."""
+
+    def _get_base_velocity_command_cmd_obs(self):
+        return np.zeros(3, dtype=np.float32)
+
+    def _get_base_velocity_cmd_obs(self):
+        return self._get_base_velocity_command_cmd_obs()

@@ -393,6 +393,40 @@ class UnitreeNode(RealNode):
     Control related functions
     """
 
+    def clip_by_torque_limit(
+        self,
+        target_joint_pos: np.ndarray,
+        p_gains: np.ndarray = 0.0,
+        d_gains: np.ndarray = 0.0,
+    ):
+        """Clip only Unitree SDK motors by torque limits.
+
+        The 31-DoF head joints are UART servos, not LowCmd motors. They must not
+        go through the body motor torque clipping path because that can alter the
+        camera targets before the background gimbal writer sees them.
+        """
+        clipped_target = np.asarray(target_joint_pos, dtype=np.float32).copy()
+        p_gains = np.asarray(p_gains, dtype=np.float32)
+        d_gains = np.asarray(d_gains, dtype=np.float32)
+
+        body_ids = np.array(
+            [sim_idx for sim_idx, real_idx in enumerate(self.joint_map) if real_idx >= 0],
+            dtype=np.int64,
+        )
+        if body_ids.size == 0:
+            return clipped_target
+
+        valid_ids = body_ids[np.abs(p_gains[body_ids]) > 1e-8]
+        if valid_ids.size == 0:
+            return clipped_target
+
+        p_limits_low = (-self.torque_limits[valid_ids]) + d_gains[valid_ids] * self.joint_vel_[valid_ids]
+        p_limits_high = self.torque_limits[valid_ids] + d_gains[valid_ids] * self.joint_vel_[valid_ids]
+        action_low = (p_limits_low / p_gains[valid_ids]) + self.joint_pos_[valid_ids]
+        action_high = (p_limits_high / p_gains[valid_ids]) + self.joint_pos_[valid_ids]
+        clipped_target[valid_ids] = np.clip(clipped_target[valid_ids], action_low, action_high)
+        return clipped_target
+
     """
     Functions that actually publish the commands and take effect
     """

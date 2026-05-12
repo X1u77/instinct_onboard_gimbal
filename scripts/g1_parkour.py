@@ -7,129 +7,17 @@ import rclpy
 from sensor_msgs.msg import JointState
 from tf2_ros import TransformBroadcaster
 
-import instinct_onboard.robot_cfgs as robot_cfgs
 from instinct_onboard.agents.base import ColdStartAgent
-from instinct_onboard.agents.parkour_agent import (
-    ParkourAgent,
-    ParkourStandAgent,
-)
+from instinct_onboard.agents.parkour_agent import ParkourAgent, ParkourStandAgent
 from instinct_onboard.ros_nodes.realsense import UnitreeRsCameraNode
 
 MAIN_LOOP_FREQUENCY_CHECK_INTERVAL = 500
-
-"""
-G1 Parkour Node
-
-A ROS2 node for controlling Unitree G1 robot using parkour agent with depth camera perception.
-This script enables autonomous parkour behaviors including standing, walking, and obstacle
-navigation using depth perception from RealSense camera.
-
-Features:
-    - Depth perception using RealSense D435 camera
-    - ParkourAgent for autonomous parkour behaviors
-    - ParkourStandAgent for standing and balancing
-    - Velocity control via joystick/wireless controller
-    - Real-time obstacle avoidance and navigation
-
-Command-Line Arguments:
-    Required:
-        --logdir PATH          Directory containing the trained parkour agent model
-                              (must contain exported/actor.onnx and depth image encoder)
-        --standdir PATH        Directory containing the stand agent model
-                              (must contain exported/actor.onnx)
-
-    Optional:
-        --startup_step_size FLOAT
-                              Startup step size for cold start agent (default: 0.2)
-        --nodryrun            Disable dry run mode (default: False, runs in dry run mode)
-        --kpkd_factor FLOAT   KP/KD gain multiplier for cold start agent (default: 2.0)
-        --depth_vis            Enable depth image visualization (publishes to /realsense/depth_image)
-        --pointcloud_vis       Enable pointcloud visualization (publishes to /realsense/pointcloud)
-        --lin_vel_deadband FLOAT
-                              Deadband for linear velocity control (default: 0.5)
-        --lin_vel_range LIST   Range of linear velocity [min, max] (default: [0.5, 0.5])
-        --ang_vel_deadband FLOAT
-                              Deadband for angular velocity control (default: 0.5)
-        --ang_vel_range LIST   Range of angular velocity [min, max] (default: [0.0, 1.0])
-        --debug                Enable debug mode with debugpy (listens on 0.0.0.0:6789)
-
-Agent Workflow:
-    1. Cold Start Agent (initial state)
-       - Automatically starts when node launches
-       - Transitions robot to initial pose
-       - Press 'R1' to switch to stand agent (if available)
-       - Press any direction button to switch to parkour agent
-
-    2. Stand Agent (requires --standdir)
-       - Activated by pressing 'R1' after cold start completes
-       - Provides standing and balancing behavior
-       - Press 'L1' to switch to parkour agent
-
-    3. Parkour Agent
-       - Executes autonomous parkour behaviors with depth perception
-       - Responds to velocity commands from joystick/wireless controller
-       - Press 'R1' to switch back to stand agent
-
-Joystick Controls:
-    R1 Button:   Switch to stand agent (from cold start or parkour)
-    L1 Button:   Switch to parkour agent (from stand)
-    Direction Buttons: Switch to parkour agent (from cold start)
-
-Velocity Control (Wireless Controller):
-    Linear velocity is controlled based on forward/backward input with deadband
-    Angular velocity is controlled based on left/right rotation input with deadband
-    Velocity ranges can be adjusted via command-line arguments
-
-Example Usage:
-    Basic usage with required arguments:
-        python g1_parkour.py \\
-            --logdir /path/to/parkour/model \\
-            --standdir /path/to/stand/model
-
-    With visualization options:
-        python g1_parkour.py \\
-            --logdir /path/to/parkour/model \\
-            --standdir /path/to/stand/model \\
-            --depth_vis --pointcloud_vis
-
-    Real robot control with gimbal:
-        python g1_parkour.py \\
-            --logdir /path/to/parkour/model \\
-            --standdir /path/to/stand/model \\
-            --gimbal --gimbal_port /dev/ttyUSB0 \\
-            --nodryrun
-
-    With custom velocity parameters:
-        python g1_parkour.py \\
-            --logdir /path/to/parkour/model \\
-            --standdir /path/to/stand/model \\
-            --lin_vel_deadband 0.3 \\
-            --lin_vel_range 0.3 0.7 \\
-            --ang_vel_deadband 0.2 \\
-            --ang_vel_range 0.0 1.5
-
-    With custom startup parameters:
-        python g1_parkour.py \\
-            --logdir /path/to/parkour/model \\
-            --standdir /path/to/stand/model \\
-            --startup_step_size 0.3 \\
-            --kpkd_factor 1.5
-
-Notes:
-    - The script runs at 50Hz main loop frequency (20ms period)
-    - RealSense camera is configured at 480x270 resolution, 60 FPS
-    - Default RealSense serial number: 420122071680
-    - Robot configuration: G1_31Dof_TorsoBase (31 degrees of freedom, with head gimbal)
-    - Joint position protection ratio: 2.0
-    - Camera runs in a separate process for better performance
-    - Velocity control parameters affect joystick/wireless controller responsiveness
-"""
 
 
 class G1ParkourNode(UnitreeRsCameraNode):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.available_agents = dict()
+        self.available_agents = {}
         self.current_agent_name: str | None = None
 
     def register_agent(self, name: str, agent):
@@ -137,98 +25,79 @@ class G1ParkourNode(UnitreeRsCameraNode):
 
     def start_ros_handlers(self):
         super().start_ros_handlers()
-        # build the joint state publisher and base_link tf publisher
         self.joint_state_publisher = self.create_publisher(JointState, "joint_states", 10)
         self.tf_broadcaster = TransformBroadcaster(self)
-        # start the main loop with 20ms duration
-        main_loop_duration = 0.02
-        self.get_logger().info(f"Starting main loop with duration: {main_loop_duration} seconds.")
-        self.main_loop_timer = self.create_timer(main_loop_duration, self.main_loop_callback)
-        if MAIN_LOOP_FREQUENCY_CHECK_INTERVAL > 1:
-            self.main_loop_timer_counter: int = 0  # counter for the main loop timer to assess the actual frequency
-            self.main_loop_timer_counter_time = time.time()
-            self.main_loop_callback_time_consumptions = queue.Queue(maxsize=MAIN_LOOP_FREQUENCY_CHECK_INTERVAL)
+        self.main_loop_timer = self.create_timer(0.02, self.main_loop_callback)
+        self.main_loop_timer_counter = 0
+        self.main_loop_timer_counter_time = time.time()
+        self.main_loop_callback_time_consumptions = queue.Queue(maxsize=MAIN_LOOP_FREQUENCY_CHECK_INTERVAL)
+        self.get_logger().info("Starting 31-DoF parkour loop at 50 Hz.")
 
     def main_loop_callback(self):
-        main_loop_callback_start_time = time.time()
+        start_time = time.time()
         if self.current_agent_name is None:
             self.get_logger().info("Starting cold start agent automatically.")
             self.current_agent_name = "cold_start"
             self.available_agents[self.current_agent_name].reset()
             return
 
-        elif self.current_agent_name == "cold_start":
-            action, done = self.available_agents[self.current_agent_name].step()
+        if self.current_agent_name == "cold_start":
+            action, done = self.available_agents["cold_start"].step()
+            self._send_agent_action("cold_start", action)
             if done:
-                if "stand" in self.available_agents.keys():
-                    self.get_logger().info(
-                        "ColdStartAgent done, press 'R1' to switch to stand agent."
-                    )
-                else:
-                    self.get_logger().info(
-                        "ColdStartAgent done, press any direction button to switch to parkour agent."
-                    )
-            self.send_action(
-                action,
-                self.available_agents[self.current_agent_name].action_offset,
-                self.available_agents[self.current_agent_name].action_scale,
-                self.available_agents[self.current_agent_name].p_gains,
-                self.available_agents[self.current_agent_name].d_gains,
-            )
-            if done and (self.joy_stick_data.R1):
-                self.get_logger().info("R1 button pressed, switching to stand agent.")
-                self.current_agent_name = "stand"
-                self.available_agents[self.current_agent_name].reset()
+                self.get_logger().info("Cold start done. Press L1 for parkour, R1 for stand.", once=True)
+                if self.joy_stick_data.L1:
+                    self._switch_agent("parkour")
+                elif self.joy_stick_data.R1 and "stand" in self.available_agents:
+                    self._switch_agent("stand")
 
         elif self.current_agent_name == "stand":
-            action, done = self.available_agents[self.current_agent_name].step()
-            self.refresh_rs_data()
-            self.send_action(
-                action,
-                self.available_agents[self.current_agent_name].action_offset,
-                self.available_agents[self.current_agent_name].action_scale,
-                self.available_agents[self.current_agent_name].p_gains,
-                self.available_agents[self.current_agent_name].d_gains,
-            )
+            action, _ = self.available_agents["stand"].step()
+            self._send_agent_action("stand", action)
             if self.joy_stick_data.L1:
-                self.get_logger().info("L1 button pressed, switching to parkour agent.")
-                self.current_agent_name = "parkour"
-                self.available_agents[self.current_agent_name].reset()
+                self._switch_agent("parkour")
 
         elif self.current_agent_name == "parkour":
-            action, done = self.available_agents[self.current_agent_name].step()
-            self.send_action(
-                action,
-                self.available_agents[self.current_agent_name].action_offset,
-                self.available_agents[self.current_agent_name].action_scale,
-                self.available_agents[self.current_agent_name].p_gains,
-                self.available_agents[self.current_agent_name].d_gains,
-            )
-            if self.joy_stick_data.R1:
-                self.get_logger().info("R1 button pressed, switching to stand agent.")
-                self.current_agent_name = "stand"
-                self.available_agents[self.current_agent_name].reset()
+            action, _ = self.available_agents["parkour"].step()
+            self._send_agent_action("parkour", action)
+            if self.joy_stick_data.R1 and "stand" in self.available_agents:
+                self._switch_agent("stand")
 
-        # count the main loop timer counter and log the actual frequency every 500 counts
-        if MAIN_LOOP_FREQUENCY_CHECK_INTERVAL > 1:
-            self.main_loop_callback_time_consumptions.put(time.time() - main_loop_callback_start_time)
-            self.main_loop_timer_counter += 1
-            if self.main_loop_timer_counter % MAIN_LOOP_FREQUENCY_CHECK_INTERVAL == 0:
-                time_consumptions = [
-                    self.main_loop_callback_time_consumptions.get() for _ in range(MAIN_LOOP_FREQUENCY_CHECK_INTERVAL)
-                ]
-                self.get_logger().info(
-                    f"Actual main loop frequency: {(MAIN_LOOP_FREQUENCY_CHECK_INTERVAL / (time.time() - self.main_loop_timer_counter_time)):.2f} Hz. Mean time consumption: {np.mean(time_consumptions):.4f} s."
-                )
-                self.main_loop_timer_counter = 0
-                self.main_loop_timer_counter_time = time.time()
+        self._log_main_loop_frequency(start_time)
+
+    def _send_agent_action(self, agent_name: str, action: np.ndarray):
+        agent = self.available_agents[agent_name]
+        self.send_action(action, agent.action_offset, agent.action_scale, agent.p_gains, agent.d_gains)
+
+    def _switch_agent(self, agent_name: str):
+        self.get_logger().info(f"Switching to {agent_name} agent.")
+        self.current_agent_name = agent_name
+        self.available_agents[agent_name].reset()
+
+    def _log_main_loop_frequency(self, start_time: float):
+        if MAIN_LOOP_FREQUENCY_CHECK_INTERVAL <= 1:
+            return
+        self.main_loop_callback_time_consumptions.put(time.time() - start_time)
+        self.main_loop_timer_counter += 1
+        if self.main_loop_timer_counter % MAIN_LOOP_FREQUENCY_CHECK_INTERVAL != 0:
+            return
+        time_consumptions = [
+            self.main_loop_callback_time_consumptions.get() for _ in range(MAIN_LOOP_FREQUENCY_CHECK_INTERVAL)
+        ]
+        self.get_logger().info(
+            f"Actual main loop frequency: "
+            f"{MAIN_LOOP_FREQUENCY_CHECK_INTERVAL / (time.time() - self.main_loop_timer_counter_time):.2f} Hz. "
+            f"Mean callback time: {np.mean(time_consumptions):.4f} s."
+        )
+        self.main_loop_timer_counter = 0
+        self.main_loop_timer_counter_time = time.time()
 
 
 def main(args):
     rclpy.init()
 
     node = G1ParkourNode(
-        rs_resolution=(480, 270),  # (width, height)
+        rs_resolution=(480, 270),
         rs_fps=60,
         rs_serial_number=args.camera_serial,
         camera_individual_process=True,
@@ -237,15 +106,11 @@ def main(args):
         dryrun=not args.nodryrun,
         enable_gimbal=args.gimbal,
         gimbal_serial_port=args.gimbal_port,
+        gimbal_pan_servo_id=args.gimbal_pan_id,
+        gimbal_tilt_servo_id=args.gimbal_tilt_id,
         gimbal_pan_range=tuple(np.rad2deg([-1.6, 1.6])),
         gimbal_tilt_range=tuple(np.rad2deg([0.5, 1.5])),
     )
-
-    stand_agent = ParkourStandAgent(
-        logdir=args.standdir,
-        ros_node=node,
-    )
-    node.register_agent("stand", stand_agent)
 
     parkour_agent = ParkourAgent(
         logdir=args.logdir,
@@ -256,8 +121,13 @@ def main(args):
         lin_vel_range=args.lin_vel_range,
         ang_vel_deadband=args.ang_vel_deadband,
         ang_vel_range=args.ang_vel_range,
+        debug_policy_io=args.debug_policy_io,
     )
     node.register_agent("parkour", parkour_agent)
+
+    if args.standdir is not None:
+        stand_agent = ParkourStandAgent(logdir=args.standdir, ros_node=node)
+        node.register_agent("stand", stand_agent)
 
     cold_start_agent = ColdStartAgent(
         startup_step_size=args.startup_step_size,
@@ -274,7 +144,7 @@ def main(args):
         node.publish_auxiliary_static_transforms("realsense_depth_link_transform")
 
     node.start_ros_handlers()
-    node.get_logger().info("G1ParkourNode is ready to run.")
+    node.get_logger().info("G1ParkourNode is ready.")
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
@@ -289,108 +159,33 @@ if __name__ == "__main__":
     import argparse
 
     def _parse_2float(s):
-        """Parse a string of two space-separated floats into a list."""
-        values = s.split()
+        values = s.split() if isinstance(s, str) else s
         if len(values) != 2:
-            raise argparse.ArgumentTypeError(f"Expected 2 floats, got {len(values)}: {s!r}")
-        try:
-            return [float(values[0]), float(values[1])]
-        except ValueError as e:
-            raise argparse.ArgumentTypeError(f"Invalid float value: {e}")
+            raise argparse.ArgumentTypeError(f"Expected 2 floats, got {values!r}")
+        return [float(values[0]), float(values[1])]
 
-    parser = argparse.ArgumentParser(description="G1 Parkour Node")
-    parser.add_argument(
-        "--standdir",
-        type=str,
-        help="Directory to load the stand agent from",
-    )
-    parser.add_argument(
-        "--logdir",
-        type=str,
-        help="Directory to load the parkour agent from",
-    )
-    parser.add_argument(
-        "--camera_serial",
-        type=str,
-        default="420122071680",
-        help="Serial number of the RealSense device to use (default: 420122071680)",
-    )
-    parser.add_argument(
-        "--startup_step_size",
-        type=float,
-        default=0.2,
-        help="Startup step size for the cold start agent (default: 0.2)",
-    )
-    parser.add_argument(
-        "--kpkd_factor",
-        type=float,
-        default=2.0,
-        help="KPKD factor for the cold start agent (default: 2.0)",
-    )
-    parser.add_argument(
-        "--depth_vis",
-        action="store_true",
-        default=False,
-        help="Visualize the depth image (default: False)",
-    )
-    parser.add_argument(
-        "--pointcloud_vis",
-        action="store_true",
-        default=False,
-        help="Visualize the pointcloud (default: False)",
-    )
-    parser.add_argument(
-        "--lin_vel_deadband",
-        type=float,
-        default=0.5,
-        help="Deadband of wireless control for linear velocity (default: 0.5)",
-    )
-    parser.add_argument(
-        "--lin_vel_range",
-        type=_parse_2float,
-        default=[0.5, 0.5],
-        help="Range of linear velocity, only forward (default: [0.5 0.5])",
-    )
-    parser.add_argument(
-        "--ang_vel_deadband",
-        type=float,
-        default=0.5,
-        help="Deadband of wireless control for angular velocity (default: 0.5)",
-    )
-    parser.add_argument(
-        "--ang_vel_range",
-        type=_parse_2float,
-        default=[0.0, 1.0],
-        help="Range of angular velocity, both turn left and turn right (default: [0.0 1.0])",
-    )
-    parser.add_argument(
-        "--nodryrun",
-        action="store_true",
-        default=False,
-        help="Run the node without dry run mode (default: False)",
-    )
-    parser.add_argument(
-        "--gimbal",
-        action="store_true",
-        default=False,
-        help="Enable gimbal control for head joints (default: False)",
-    )
-    parser.add_argument(
-        "--gimbal_port",
-        type=str,
-        default="/dev/ttyUSB0",
-        help="Serial port for gimbal servo (default: /dev/ttyUSB0)",
-    )
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        default=False,
-        help="Enable debug mode (default: False)",
-    )
+    parser = argparse.ArgumentParser(description="G1 31-DoF parkour deployment node")
+    parser.add_argument("--logdir", type=str, required=True, help="Directory containing actor/depth ONNX and YAML files")
+    parser.add_argument("--standdir", type=str, default=None, help="Optional stand policy directory")
+    parser.add_argument("--camera_serial", type=str, default="420122071680")
+    parser.add_argument("--startup_step_size", type=float, default=0.2)
+    parser.add_argument("--kpkd_factor", type=float, default=2.0)
+    parser.add_argument("--depth_vis", action="store_true", default=False)
+    parser.add_argument("--pointcloud_vis", action="store_true", default=False)
+    parser.add_argument("--lin_vel_deadband", type=float, default=0.5)
+    parser.add_argument("--lin_vel_range", type=_parse_2float, default=[0.5, 0.5])
+    parser.add_argument("--ang_vel_deadband", type=float, default=0.15)
+    parser.add_argument("--ang_vel_range", type=_parse_2float, default=[0.0, 1.0])
+    parser.add_argument("--nodryrun", action="store_true", default=False)
+    parser.add_argument("--gimbal", action="store_true", default=False, help="Enable UART head gimbal control")
+    parser.add_argument("--gimbal_port", type=str, default="/dev/ttyUSB0")
+    parser.add_argument("--gimbal_pan_id", type=int, default=0)
+    parser.add_argument("--gimbal_tilt_id", type=int, default=1)
+    parser.add_argument("--debug_policy_io", action="store_true", default=False)
+    parser.add_argument("--debug", action="store_true", default=False)
 
     args = parser.parse_args()
     if args.debug:
-        # import typing; typing.TYPE_CHECKING = True
         import debugpy
 
         ip_address = ("0.0.0.0", 6789)
