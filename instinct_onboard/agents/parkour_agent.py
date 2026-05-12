@@ -276,6 +276,13 @@ class Body29DepthOn31Agent(ParkourStandAgent):
             return default
         return value
 
+    def _get_body_joint_ids(self):
+        return [
+            i
+            for i, joint_name in enumerate(self.ros_node.sim_joint_names)
+            if joint_name not in ("head_yaw_joint", "head_pitch_joint")
+        ]
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._head_joint_ids = np.array(
@@ -286,11 +293,7 @@ class Body29DepthOn31Agent(ParkourStandAgent):
             dtype=np.int64,
         )
         self._body_joint_ids = np.array(
-            [
-                i
-                for i, joint_name in enumerate(self.ros_node.sim_joint_names)
-                if joint_name not in ("head_yaw_joint", "head_pitch_joint")
-            ],
+            self._get_body_joint_ids(),
             dtype=np.int64,
         )
         self._apply_head_defaults()
@@ -298,16 +301,17 @@ class Body29DepthOn31Agent(ParkourStandAgent):
     def _parse_action_config(self):
         self._camera_action_joint_ids = []
         self._camera_action_ranges = []
+        body_joint_ids = self._get_body_joint_ids()
         self.default_joint_pos = np.zeros(self.ros_node.NUM_JOINTS, dtype=np.float32)
         for joint_name_expr, joint_pos in self.cfg["scene"]["robot"]["init_state"]["joint_pos"].items():
-            for i in range(self.BODY_DOF):
+            for i in body_joint_ids:
                 name = self.ros_node.sim_joint_names[i]
                 if re.search(joint_name_expr, name):
                     self.default_joint_pos[i] = joint_pos
 
         self.default_joint_vel = np.zeros(self.ros_node.NUM_JOINTS, dtype=np.float32)
         for joint_name_expr, joint_vel in self.cfg["scene"]["robot"]["init_state"]["joint_vel"].items():
-            for i in range(self.BODY_DOF):
+            for i in body_joint_ids:
                 name = self.ros_node.sim_joint_names[i]
                 if re.search(joint_name_expr, name):
                     self.default_joint_vel[i] = joint_vel
@@ -315,7 +319,7 @@ class Body29DepthOn31Agent(ParkourStandAgent):
         self._p_gains = np.zeros(self.ros_node.NUM_JOINTS, dtype=np.float32)
         self._d_gains = np.zeros(self.ros_node.NUM_JOINTS, dtype=np.float32)
         for actuator_config in self.cfg["scene"]["robot"]["actuators"].values():
-            for i in range(self.BODY_DOF):
+            for i in body_joint_ids:
                 name = self.ros_node.sim_joint_names[i]
                 for joint_name_expr in actuator_config["joint_names_expr"]:
                     if not re.search(joint_name_expr, name):
@@ -335,7 +339,7 @@ class Body29DepthOn31Agent(ParkourStandAgent):
             use_default_offset = action_config.get("use_default_offset", True)
             offset = action_config.get("offset", 0.0)
             scale = action_config.get("scale", 1.0)
-            for i in range(self.BODY_DOF):
+            for i in body_joint_ids:
                 name = self.ros_node.sim_joint_names[i]
                 for joint_name_expr in action_config["joint_names"]:
                     if not re.search(joint_name_expr, name):
