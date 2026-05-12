@@ -209,6 +209,11 @@ class ParkourAgent(OnboardAgent):
         else:
             speed_scale = float(np.clip(raw, 0.0, 1.0))
         self.speed_scale = speed_scale
+        if self.debug_policy_io:
+            self.ros_node.get_logger().info(
+                f"parkour_command raw_ly={raw:+.3f} speed_scale={speed_scale:.3f}",
+                throttle_duration_sec=0.5,
+            )
         self.xyyaw_command = np.array([speed_scale], dtype=np.float32)
         return self.xyyaw_command
 

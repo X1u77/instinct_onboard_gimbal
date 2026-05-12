@@ -65,6 +65,7 @@ class G1ThreePolicyNode(UnitreeRsCameraNode):
     def _switch_to(self, agent_name, reason):
         self.get_logger().info(reason)
         self.current_agent_name = agent_name
+        self.action[:] = 0.0
         self.available_agents[agent_name].reset()
 
     def _log_main_loop_frequency(self, start_time):
