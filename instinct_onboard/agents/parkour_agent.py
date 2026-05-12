@@ -508,6 +508,7 @@ class ParkourAgent(OnboardAgent):
         super().__init__(logdir, ros_node)
         self.ort_sessions = dict()
         self.speed_scale = float(initial_speed_scale)
+        self.current_speed_scale = self.speed_scale
         self.debug_policy_io = debug_policy_io
         self._last_policy_io_log_time = 0.0
         self.lin_vel_deadband = lin_vel_deadband
@@ -782,7 +783,7 @@ class ParkourAgent(OnboardAgent):
         self.ros_node.get_logger().info(
             "parkour_io "
             f"ly={float(self.ros_node.joy_stick_data.ly):+.3f} "
-            f"scale={float(self.speed_scale):+.3f} "
+            f"scale={float(self.current_speed_scale):+.3f} "
             f"raw_max={float(np.max(np.abs(action))):.3f} "
             f"target_max={float(np.max(np.abs(target_joint_pos))):.3f} "
             f"raw[{', '.join(action_summary)}] "
@@ -799,8 +800,8 @@ class ParkourAgent(OnboardAgent):
     def _get_base_velocity_obs(self):
         """Return the normalized forward speed scale used during training."""
         joystick_scale = float(np.clip(self.ros_node.joy_stick_data.ly, 0.0, 1.0))
-        self.speed_scale = joystick_scale
-        self.xyyaw_command = np.array([joystick_scale], dtype=np.float32)
+        self.current_speed_scale = max(self.speed_scale, joystick_scale)
+        self.xyyaw_command = np.array([self.current_speed_scale], dtype=np.float32)
         return self.xyyaw_command
 
     def _get_joint_vel_rel_obs(self):

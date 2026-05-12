@@ -43,6 +43,13 @@ class G1ThreePolicyNode(UnitreeRsCameraNode):
         self.current_agent_name = agent_name
         self.available_agents[self.current_agent_name].reset()
 
+    def _set_speed_scale(self, speed_scale: float, reason=None):
+        speed_scale = float(speed_scale)
+        self.current_speed_scale = speed_scale
+        self.available_agents["parkour"].set_speed_scale(speed_scale)
+        if reason:
+            self.get_logger().info(reason)
+
     def _step_current_agent(self):
         action, done = self.available_agents[self.current_agent_name].step()
         self.send_action(
@@ -74,6 +81,7 @@ class G1ThreePolicyNode(UnitreeRsCameraNode):
             elif done and self.joy_stick_data.A:
                 self._switch_to("walk", "A button pressed, switching to 29dof walk.")
             elif done and self.joy_stick_data.L1:
+                self._set_speed_scale(0.0, "L1 button pressed, resetting parkour speed_scale=0.0.")
                 self._switch_to("parkour", "L1 button pressed, switching to 31dof parkour.")
 
         elif self.current_agent_name == "stand":
@@ -83,6 +91,7 @@ class G1ThreePolicyNode(UnitreeRsCameraNode):
             elif self.joy_stick_data.A:
                 self._switch_to("walk", "A button pressed, switching to 29dof walk.")
             elif self.joy_stick_data.L1:
+                self._set_speed_scale(0.0, "L1 button pressed, resetting parkour speed_scale=0.0.")
                 self._switch_to("parkour", "L1 button pressed, switching to 31dof parkour.")
 
         elif self.current_agent_name == "walk":
@@ -92,6 +101,7 @@ class G1ThreePolicyNode(UnitreeRsCameraNode):
             elif self.joy_stick_data.A:
                 self._switch_to("walk", "A button pressed, switching to 29dof walk.")
             elif self.joy_stick_data.L1:
+                self._set_speed_scale(0.0, "L1 button pressed, resetting parkour speed_scale=0.0.")
                 self._switch_to("parkour", "L1 button pressed, switching to 31dof parkour.")
 
         elif self.current_agent_name == "parkour":
