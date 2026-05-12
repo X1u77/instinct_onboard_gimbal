@@ -80,18 +80,27 @@ class ParkourAgent(OnboardAgent):
 
     def _parse_action_config(self):
         super()._parse_action_config()
+        self._policy_action_joint_ids: list[int] = []
         self._camera_action_joint_ids: list[int] = []
         self._camera_action_ranges: list[tuple[float, float]] = []
-        camera_cfg = self.cfg["actions"].get("camera_yaw_pitch")
-        if camera_cfg is not None:
-            self._camera_action_joint_ids = [
-                self.ros_node.sim_joint_names.index(camera_cfg["yaw_joint_name"]),
-                self.ros_node.sim_joint_names.index(camera_cfg["pitch_joint_name"]),
-            ]
-            self._camera_action_ranges = [
-                tuple(camera_cfg.get("yaw_range", (-np.inf, np.inf))),
-                tuple(camera_cfg.get("pitch_range", (-np.inf, np.inf))),
-            ]
+        for action_config in self.cfg["actions"].values():
+            if action_config.get("asset_name") != "robot":
+                continue
+            if "joint_names" in action_config:
+                for joint_id, joint_name in enumerate(self.ros_node.sim_joint_names):
+                    if any(re.search(joint_name_expr, joint_name) for joint_name_expr in action_config["joint_names"]):
+                        self._policy_action_joint_ids.append(joint_id)
+            elif "yaw_joint_name" in action_config and "pitch_joint_name" in action_config:
+                camera_joint_ids = [
+                    self.ros_node.sim_joint_names.index(action_config["yaw_joint_name"]),
+                    self.ros_node.sim_joint_names.index(action_config["pitch_joint_name"]),
+                ]
+                self._policy_action_joint_ids.extend(camera_joint_ids)
+                self._camera_action_joint_ids = camera_joint_ids
+                self._camera_action_ranges = [
+                    tuple(action_config.get("yaw_range", (-np.inf, np.inf))),
+                    tuple(action_config.get("pitch_range", (-np.inf, np.inf))),
+                ]
 
     def _parse_depth_image_config(self):
         camera_cfg = self.cfg["scene"]["camera"]
@@ -157,10 +166,21 @@ class ParkourAgent(OnboardAgent):
         depth_embedding = self.ort_sessions["depth_encoder"].run(None, {depth_input_name: depth_obs})[0]
         actor_input = np.concatenate([proprio_obs, depth_embedding], axis=1)
         actor_input_name = self.ort_sessions["actor"].get_inputs()[0].name
-        action = self.ort_sessions["actor"].run(None, {actor_input_name: actor_input})[0].reshape(-1)
+        policy_action = self.ort_sessions["actor"].run(None, {actor_input_name: actor_input})[0].reshape(-1)
+        action = self._policy_action_to_full_joint_action(policy_action.astype(np.float32))
         action = self._clip_camera_yaw_pitch_action(action.astype(np.float32))
         self._debug_policy_io(action)
         return action, False
+
+    def _policy_action_to_full_joint_action(self, policy_action: np.ndarray) -> np.ndarray:
+        if len(policy_action) != len(self._policy_action_joint_ids):
+            raise ValueError(
+                f"Policy action dim {len(policy_action)} does not match parsed action mapping "
+                f"{len(self._policy_action_joint_ids)}"
+            )
+        full_action = np.zeros(self.ros_node.NUM_ACTIONS, dtype=np.float32)
+        full_action[np.asarray(self._policy_action_joint_ids, dtype=np.int64)] = policy_action
+        return full_action
 
     def _clip_camera_yaw_pitch_action(self, action: np.ndarray) -> np.ndarray:
         if not self._camera_action_joint_ids:
@@ -233,6 +253,9 @@ class ParkourAgent(OnboardAgent):
         yaw_id = self.ros_node.sim_joint_names.index("head_yaw_joint")
         pitch_id = self.ros_node.sim_joint_names.index("head_pitch_joint")
         return self.ros_node.joint_pos_[[yaw_id, pitch_id]]
+
+    def _get_last_action_obs(self):
+        return np.asarray(self.ros_node.action, dtype=np.float32)[self._policy_action_joint_ids]
 
     def refresh_depth_frame(self):
         self.ros_node.refresh_rs_data()
