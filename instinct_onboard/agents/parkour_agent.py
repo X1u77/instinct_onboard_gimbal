@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import re
 
 import cv2
 import numpy as np
@@ -268,6 +269,8 @@ class Body29DepthOn31Agent(ParkourStandAgent):
         self._apply_head_defaults()
 
     def _parse_action_config(self):
+        self._camera_action_joint_ids = []
+        self._camera_action_ranges = []
         self.default_joint_pos = np.zeros(self.ros_node.NUM_JOINTS, dtype=np.float32)
         for joint_name_expr, joint_pos in self.cfg["scene"]["robot"]["init_state"]["joint_pos"].items():
             for i in range(self.BODY_DOF):
@@ -342,6 +345,9 @@ class Body29DepthOn31Agent(ParkourStandAgent):
 
     def _get_camera_offset_yaw_pitch_obs(self):
         return np.zeros(2, dtype=np.float32)
+
+    def _debug_policy_io(self, action: np.ndarray):
+        return
 
     def step(self):
         action, done = super().step()

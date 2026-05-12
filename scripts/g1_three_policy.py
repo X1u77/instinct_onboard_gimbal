@@ -42,8 +42,12 @@ class G1ThreePolicyNode(UnitreeRsCameraNode):
             self.available_agents[self.current_agent_name].reset()
             return
 
-        action, _ = self.available_agents[self.current_agent_name].step()
+        action, done = self.available_agents[self.current_agent_name].step()
         self._send_agent_action(self.current_agent_name, action)
+
+        if self.current_agent_name == "cold_start" and not done:
+            self._log_main_loop_frequency(start_time)
+            return
 
         if self.joy_stick_data.R1 and self.current_agent_name != "stand":
             self._switch_to("stand", "R1 pressed, switching to 29DoF stand.")
