@@ -46,6 +46,8 @@ class G1ThreePolicyNode(UnitreeRsCameraNode):
     def _switch_to(self, agent_name: str, reason: str):
         self.get_logger().info(reason)
         self.current_agent_name = agent_name
+        if hasattr(self, "record_mode_switch"):
+            self.record_mode_switch(agent_name, reason)
         self.available_agents[self.current_agent_name].reset()
 
     def _set_speed_scale(self, speed_scale: float, reason=None):
@@ -75,6 +77,8 @@ class G1ThreePolicyNode(UnitreeRsCameraNode):
         if self.current_agent_name is None:
             self.get_logger().info("Starting cold start agent automatically.")
             self.current_agent_name = "cold_start"
+            if hasattr(self, "record_mode_switch"):
+                self.record_mode_switch("cold_start", "Starting cold start agent automatically.")
             self.available_agents[self.current_agent_name].reset()
             return
 

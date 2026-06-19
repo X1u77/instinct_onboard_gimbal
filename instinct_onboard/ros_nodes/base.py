@@ -87,6 +87,7 @@ class RealNode(Node):
         self._joint_tracking_last_time = 0.0
         self._joint_tracking_start_time = None
         self._joint_tracking_records = []
+        self._joint_tracking_mode_events = []
         # This is a common joy stick data definition for multi-robot support.
         # Each OEM node should handle how to convert the raw joy stick data to this common definition.
         # Each agent should use this interface to acquire joy stick continuous values and button states.
@@ -237,8 +238,20 @@ class RealNode(Node):
         self._joint_tracking_last_time = 0.0
         self._joint_tracking_start_time = None
         self._joint_tracking_records = []
+        self._joint_tracking_mode_events = []
         if self._joint_tracking_enabled and self._joint_tracking_logdir:
             os.makedirs(self._joint_tracking_logdir, exist_ok=True)
+
+    def record_mode_switch(self, mode: str, reason: str = ""):
+        if not self._joint_tracking_enabled:
+            return
+        self._joint_tracking_mode_events.append(
+            {
+                "time_abs": time.time(),
+                "mode": str(mode),
+                "reason": str(reason),
+            }
+        )
 
     def _record_joint_tracking(self, expected_joint_pos, commanded_joint_pos, raw_action):
         if not self._joint_tracking_enabled:
@@ -256,6 +269,7 @@ class RealNode(Node):
                 "commanded_joint_pos": np.asarray(commanded_joint_pos, dtype=np.float32).copy(),
                 "actual_joint_pos": np.asarray(self.joint_pos_, dtype=np.float32).copy(),
                 "raw_action": np.asarray(raw_action, dtype=np.float32).copy(),
+                "mode": str(getattr(self, "current_agent_name", "unknown") or "none"),
             }
         )
 
@@ -269,6 +283,22 @@ class RealNode(Node):
         commanded = np.stack([record["commanded_joint_pos"] for record in self._joint_tracking_records])
         actual = np.stack([record["actual_joint_pos"] for record in self._joint_tracking_records])
         raw_action = np.stack([record["raw_action"] for record in self._joint_tracking_records])
+        modes = np.asarray([record["mode"] for record in self._joint_tracking_records])
+        switch_times = []
+        switch_modes = []
+        switch_reasons = []
+        for event in self._joint_tracking_mode_events:
+            if self._joint_tracking_start_time is None:
+                continue
+            switch_time = event["time_abs"] - self._joint_tracking_start_time
+            if switch_time < -1e-6 or switch_time > float(time_data[-1]) + 1e-6:
+                continue
+            switch_times.append(switch_time)
+            switch_modes.append(event["mode"])
+            switch_reasons.append(event["reason"])
+        switch_times = np.asarray(switch_times, dtype=np.float32)
+        switch_modes = np.asarray(switch_modes)
+        switch_reasons = np.asarray(switch_reasons)
         npz_path = os.path.join(logdir, "joint_tracking.npz")
         np.savez_compressed(
             npz_path,
@@ -277,6 +307,10 @@ class RealNode(Node):
             commanded_joint_pos=commanded,
             actual_joint_pos=actual,
             raw_action=raw_action,
+            mode=modes,
+            switch_time=switch_times,
+            switch_mode=switch_modes,
+            switch_reason=switch_reasons,
             joint_names=np.asarray(self.sim_joint_names),
         )
 
@@ -291,8 +325,29 @@ class RealNode(Node):
             rows = int(np.ceil(self.NUM_JOINTS / cols))
             fig, axes = plt.subplots(rows, cols, figsize=(cols * 4.2, rows * 2.5), sharex=True)
             axes = np.asarray(axes).reshape(-1)
+            mode_colors = {
+                "cold_start": "#d9d9d9",
+                "stand": "#9ecae1",
+                "walk": "#a1d99b",
+                "parkour": "#fdae6b",
+            }
+            mode_change_indices = np.flatnonzero(modes[1:] != modes[:-1]) + 1
+            segment_starts = np.concatenate(([0], mode_change_indices))
+            segment_ends = np.concatenate((mode_change_indices, [len(time_data) - 1]))
             for joint_id in range(self.NUM_JOINTS):
                 ax = axes[joint_id]
+                for start_idx, end_idx in zip(segment_starts, segment_ends):
+                    mode = str(modes[start_idx])
+                    color = mode_colors.get(mode, "#f0f0f0")
+                    ax.axvspan(
+                        float(time_data[start_idx]),
+                        float(time_data[end_idx]),
+                        color=color,
+                        alpha=0.12,
+                        linewidth=0,
+                    )
+                for switch_time, switch_mode in zip(switch_times, switch_modes):
+                    ax.axvline(float(switch_time), color="black", linestyle="--", linewidth=0.5, alpha=0.35)
                 error = expected[:, joint_id] - actual[:, joint_id]
                 ax.plot(time_data, expected[:, joint_id], label="expected", linewidth=1.0)
                 ax.plot(time_data, actual[:, joint_id], label="actual", linewidth=1.0)
@@ -300,6 +355,16 @@ class RealNode(Node):
                 title = self.sim_joint_names[joint_id]
                 ax.set_title(f"{joint_id}: {title}", fontsize=8)
                 ax.grid(True, linewidth=0.3, alpha=0.5)
+            for switch_time, switch_mode in zip(switch_times, switch_modes):
+                axes[0].text(
+                    float(switch_time),
+                    1.02,
+                    str(switch_mode),
+                    transform=axes[0].get_xaxis_transform(),
+                    rotation=45,
+                    fontsize=7,
+                    va="bottom",
+                )
             for ax in axes[self.NUM_JOINTS :]:
                 ax.axis("off")
             axes[0].legend(fontsize=7)
