@@ -721,6 +721,7 @@ class ParkourAgent(OnboardAgent):
         super().reset()
         if hasattr(self, "depth_image_buffer"):
             self.depth_image_buffer.reset()
+            self.refresh_depth_frame()
 
     def step(self):
         """Perform a single step of the agent."""
