@@ -1,7 +1,12 @@
 import queue
 import sys
-import time
+import os
 
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+import time
+import inspect
 import numpy as np
 import rclpy
 from sensor_msgs.msg import JointState
@@ -46,7 +51,11 @@ class G1ThreePolicyNode(UnitreeRsCameraNode):
     def _set_speed_scale(self, speed_scale: float, reason=None):
         speed_scale = float(speed_scale)
         self.current_speed_scale = speed_scale
-        self.available_agents["parkour"].set_speed_scale(speed_scale)
+
+        parkour_agent = self.available_agents["parkour"]
+        if hasattr(parkour_agent, "set_speed_scale"):
+            parkour_agent.set_speed_scale(speed_scale)
+
         if reason:
             self.get_logger().info(reason)
 
@@ -142,15 +151,22 @@ def main(args):
         gimbal_tilt_range=(float(np.rad2deg(0.5)), 60.0),
     )
 
-    parkour_agent = ParkourAgent(
-        logdir=args.logdir,
-        ros_node=node,
-        depth_vis=args.depth_vis,
-        pointcloud_vis=args.pointcloud_vis,
-        initial_speed_scale=0.0,
-        debug_policy_io=args.debug_policy_io,
-    )
-    parkour_agent.set_speed_scale(0.0)
+    parkour_kwargs = dict(
+    logdir=args.logdir,
+    ros_node=node,
+    depth_vis=args.depth_vis,
+    pointcloud_vis=args.pointcloud_vis,
+)
+
+    parkour_signature = inspect.signature(ParkourAgent)
+    if "initial_speed_scale" in parkour_signature.parameters:
+        parkour_kwargs["initial_speed_scale"] = 0.0
+    if "debug_policy_io" in parkour_signature.parameters:
+        parkour_kwargs["debug_policy_io"] = args.debug_policy_io
+
+    parkour_agent = ParkourAgent(**parkour_kwargs)
+    if hasattr(parkour_agent, "set_speed_scale"):
+        parkour_agent.set_speed_scale(0.0)
 
     stand_agent = Body29DepthOn31Agent(
         logdir=args.stand_logdir,

@@ -23,11 +23,11 @@ try:
     controller.set_gimbal_angle(-60.0, 30.0)
     time.sleep(2)
 
-    print("move pitch -> 30")
+    print("move pitch -> 0")
     controller.set_gimbal_angle(0, 0.0)
     time.sleep(2)
 
-    print("move pitch -> 60")
+    print("move pitch -> 90")
     controller.set_gimbal_angle(0, 90.0)
     time.sleep(2)
 
