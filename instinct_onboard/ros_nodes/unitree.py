@@ -185,7 +185,8 @@ class UnitreeNode(RealNode):
         self._gimbal_writer_thread.start()
 
     def _gimbal_writer_loop(self):
-        writer_period_s = 0.05
+        # The learned policy produces head targets at 50 Hz.
+        writer_period_s = 0.02
         while not self._gimbal_writer_stop.is_set():
             self._write_latest_gimbal_cmd()
             time.sleep(writer_period_s)
@@ -449,8 +450,8 @@ class UnitreeNode(RealNode):
         head_pitch_servo_deg = np.rad2deg(head_pitch_sim) * self.joint_signs[30]
 
         with self._gimbal_lock:
-            self._gimbal_joint_pos[:] = [head_yaw_sim, head_pitch_sim]
-            self._gimbal_joint_vel[:] = 0.0
+            # Do not overwrite measured feedback with the commanded target.
+            # _gimbal_joint_pos/_vel are updated only by the UART reader.
             self._gimbal_target_cmd_deg = np.array(
                 [head_yaw_servo_deg, head_pitch_servo_deg],
                 dtype=np.float32,

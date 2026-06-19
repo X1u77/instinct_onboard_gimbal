@@ -701,8 +701,15 @@ class ParkourAgent(OnboardAgent):
         print(f"Loaded ONNX models from {self.logdir}")
 
     def reset(self):
-        """Reset the agent state and the rosbag reader."""
-        pass
+        """Start a fresh rollout when this policy takes control.
+
+        Raw actions from another policy are not meaningful as this policy's
+        ``last_action`` observation.  Clear them before priming the temporal
+        observation buffers from the robot's current state.
+        """
+        self.ros_node.action.fill(0.0)
+        super().reset()
+        self.depth_image_buffer.reset()
 
     def step(self):
         """Perform a single step of the agent."""

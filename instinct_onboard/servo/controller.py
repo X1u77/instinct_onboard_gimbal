@@ -73,6 +73,7 @@ class ServoController:
         # 状态缓存
         self._angle_cache: Dict[int, ServoAngle] = {}
         self._status_cache: Dict[int, ServoStatus] = {}
+        self._target_protocol_angle_cache: Dict[int, int] = {}
 
         # 回调函数
         self._angle_callbacks: List[Callable[[int, float], None]] = []
@@ -249,9 +250,11 @@ class ServoController:
                 protocol_angle = np.clip(protocol_angle, config.angle_min, config.angle_max)
                 p = power_mw if power_mw is not None else config.default_power_mw
 
-                # 计算运行时间（ms）: time_ms = distance / speed * 1000
-                # distance 单位是 0.1°，需要转换为度再计算
-                distance_deg = abs(protocol_angle) / 10.0
+                # Compute travel time from the previous target, not from zero.
+                # Recomputing from zero makes a head held near 50 degrees receive
+                # a ~250 ms trajectory for every tiny 50 Hz correction.
+                previous_protocol_angle = self._target_protocol_angle_cache.get(servo_id, 0)
+                distance_deg = abs(protocol_angle - previous_protocol_angle) / 10.0
                 time_ms = int(distance_deg / speed_deg_s * 1000)
                 time_ms = max(time_ms, 20)  # 最小20ms
 
@@ -261,6 +264,8 @@ class ServoController:
                 cmd = self.protocol.sync_position_control(commands)
                 self._send_raw(cmd)
                 self._wait_cmd_interval()
+                for servo_id, protocol_angle, _, _ in commands:
+                    self._target_protocol_angle_cache[servo_id] = protocol_angle
                 return True
             except Exception as e:
                 print(f"Failed to send sync command: {e}")

@@ -56,8 +56,12 @@ class RealSenseCamera:
 
     def get_frame(self) -> rs.depth_frame or None:
         # read from pyrealsense2, preprocess and write the model embedding to the buffer
-        timeout_ms = int(1000 / self.fps)  # ms
-        frames = self.pipeline.wait_for_frames(timeout_ms * 2)
+        # A single dropped USB frame must not kill the camera subprocess.
+        timeout_ms = max(100, int(3000 / self.fps))
+        try:
+            frames = self.pipeline.wait_for_frames(timeout_ms)
+        except RuntimeError:
+            return None
         depth_frame = frames.get_depth_frame()
         return depth_frame
 
@@ -90,6 +94,12 @@ def camera_process_func(
     camera_process_counter = 0
     while True:
         camera_data = camera.get_camera_data()
+        if camera_data is None:
+            if header.writer_termination_signal == 1:
+                header = None
+                image_buffer = None
+                break
+            continue
         # mark in header to start writing
         header.writer_status = 1
         # write the camera data to the shared memory

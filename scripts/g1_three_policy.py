@@ -27,6 +27,9 @@ class G1ThreePolicyNode(UnitreeRsCameraNode):
         self.available_agents = dict()
         self.current_agent_name: str | None = None
         self.current_speed_scale = 0.0
+        self.parkour_blend_duration = 0.0
+        self._transition_start_time = None
+        self._transition_start_joint_pos = None
 
     def register_agent(self, name: str, agent):
         self.available_agents[name] = agent
@@ -47,6 +50,12 @@ class G1ThreePolicyNode(UnitreeRsCameraNode):
         self.get_logger().info(reason)
         self.current_agent_name = agent_name
         self.available_agents[self.current_agent_name].reset()
+        if agent_name == "parkour" and self.parkour_blend_duration > 0.0:
+            self._transition_start_time = time.monotonic()
+            self._transition_start_joint_pos = self.joint_pos_.copy()
+        else:
+            self._transition_start_time = None
+            self._transition_start_joint_pos = None
 
     def _set_speed_scale(self, speed_scale: float, reason=None):
         speed_scale = float(speed_scale)
@@ -60,13 +69,32 @@ class G1ThreePolicyNode(UnitreeRsCameraNode):
             self.get_logger().info(reason)
 
     def _step_current_agent(self):
-        action, done = self.available_agents[self.current_agent_name].step()
+        agent = self.available_agents[self.current_agent_name]
+        action, done = agent.step()
+        if self.current_agent_name == "parkour" and self._transition_start_time is not None:
+            elapsed = time.monotonic() - self._transition_start_time
+            alpha = float(np.clip(elapsed / self.parkour_blend_duration, 0.0, 1.0))
+            policy_target = action * agent.action_scale + agent.action_offset
+            blended_target = (1.0 - alpha) * self._transition_start_joint_pos + alpha * policy_target
+            blended_action = np.zeros_like(action)
+            scale_nonzero = np.abs(agent.action_scale) > 1e-8
+            np.divide(
+                blended_target - agent.action_offset,
+                agent.action_scale,
+                out=blended_action,
+                where=scale_nonzero,
+            )
+            action = blended_action
+            if alpha >= 1.0:
+                self._transition_start_time = None
+                self._transition_start_joint_pos = None
+                self.get_logger().info("Parkour smooth takeover complete.")
         self.send_action(
             action,
-            self.available_agents[self.current_agent_name].action_offset,
-            self.available_agents[self.current_agent_name].action_scale,
-            self.available_agents[self.current_agent_name].p_gains,
-            self.available_agents[self.current_agent_name].d_gains,
+            agent.action_offset,
+            agent.action_scale,
+            agent.p_gains,
+            agent.d_gains,
         )
         return done
 
@@ -148,7 +176,7 @@ def main(args):
         enable_gimbal=args.gimbal,
         gimbal_serial_port=args.gimbal_port,
         gimbal_pan_range=tuple(np.rad2deg([-1.6, 1.6])),
-        gimbal_tilt_range=(float(np.rad2deg(0.5)), 60.0),
+        gimbal_tilt_range=tuple(np.rad2deg([0.5, 1.5])),
     )
 
     parkour_kwargs = dict(
@@ -165,6 +193,7 @@ def main(args):
         parkour_kwargs["debug_policy_io"] = args.debug_policy_io
 
     parkour_agent = ParkourAgent(**parkour_kwargs)
+    node.parkour_blend_duration = max(0.0, args.parkour_blend_duration)
     if hasattr(parkour_agent, "set_speed_scale"):
         parkour_agent.set_speed_scale(0.0)
 
@@ -214,6 +243,12 @@ if __name__ == "__main__":
     parser.add_argument("--stand_logdir", type=str, help="Directory to load the 29dof stand agent from")
     parser.add_argument("--walk_logdir", type=str, help="Directory to load the 29dof walk agent from")
     parser.add_argument("--logdir", type=str, help="Directory to load the 31dof parkour agent from")
+    parser.add_argument(
+        "--parkour_blend_duration",
+        type=float,
+        default=0.5,
+        help="Seconds to blend from the current pose into parkour targets (default: 0.5)",
+    )
     parser.add_argument(
         "--startup_step_size",
         type=float,
