@@ -151,12 +151,14 @@ def main(args):
         gimbal_tilt_range=(float(np.rad2deg(0.5)), 60.0),
     )
 
+    publish_depth_image = args.depth_vis or args.publish_depth_image or args.debug_windows
+    print_policy_io = args.debug_policy_io or args.debug_windows
     parkour_kwargs = dict(
-    logdir=args.logdir,
-    ros_node=node,
-    depth_vis=args.depth_vis,
-    pointcloud_vis=args.pointcloud_vis,
-)
+        logdir=args.logdir,
+        ros_node=node,
+        depth_vis=publish_depth_image,
+        pointcloud_vis=args.pointcloud_vis,
+    )
 
     parkour_signature = inspect.signature(ParkourAgent)
     if "initial_speed_scale" in parkour_signature.parameters:
@@ -177,6 +179,37 @@ def main(args):
         ros_node=node,
     )
 
+    for agent_name, agent in {
+        "stand": stand_agent,
+        "walk": walk_agent,
+        "parkour": parkour_agent,
+    }.items():
+        if hasattr(agent, "configure_policy_io_debug"):
+            agent.configure_policy_io_debug(
+                agent_name=agent_name,
+                print_enabled=print_policy_io,
+                logdir=args.policy_io_logdir,
+                interval=args.policy_io_interval,
+            )
+
+    if hasattr(node, "configure_debug_windows"):
+        node.configure_debug_windows(
+            enabled=args.debug_windows,
+            show_depth=publish_depth_image,
+            show_policy_io=print_policy_io,
+        )
+    joint_tracking_logdir = args.joint_tracking_logdir
+    if joint_tracking_logdir is None and args.policy_io_logdir:
+        joint_tracking_logdir = os.path.join(args.policy_io_logdir, "joint_tracking")
+    record_joint_tracking = args.record_joint_tracking or joint_tracking_logdir is not None
+    if hasattr(node, "configure_joint_tracking"):
+        node.configure_joint_tracking(
+            enabled=record_joint_tracking,
+            logdir=joint_tracking_logdir,
+            interval=args.joint_tracking_interval,
+            show_plot=args.show_joint_tracking_plot,
+        )
+
     node.register_agent("stand", stand_agent)
     node.register_agent("walk", walk_agent)
     node.register_agent("parkour", parkour_agent)
@@ -192,8 +225,16 @@ def main(args):
     )
     node.register_agent("cold_start", cold_start_agent)
 
-    if args.depth_vis or args.pointcloud_vis:
+    if publish_depth_image or args.pointcloud_vis:
         node.publish_auxiliary_static_transforms("realsense_depth_link_transform")
+    if publish_depth_image:
+        node.get_logger().info("Depth image debug stream is published on /debug/depth_image.")
+    if args.policy_io_logdir:
+        node.get_logger().info(f"Policy I/O tensors are recorded under {args.policy_io_logdir}.")
+    if args.debug_windows:
+        node.get_logger().info("Debug windows are enabled for depth image and policy I/O summaries.")
+    if record_joint_tracking:
+        node.get_logger().info(f"Joint tracking will be recorded under {joint_tracking_logdir}.")
 
     node.start_ros_handlers()
     node.get_logger().info("G1ThreePolicyNode is ready to run.")
@@ -202,6 +243,10 @@ def main(args):
     except KeyboardInterrupt:
         print("Keyboard interrupt received, shutting down...")
     finally:
+        if hasattr(node, "finalize_joint_tracking"):
+            node.finalize_joint_tracking()
+        if hasattr(node, "close_debug_windows"):
+            node.close_debug_windows()
         node.destroy_node()
         rclpy.shutdown()
         print("Node shutdown complete.")
@@ -231,6 +276,12 @@ if __name__ == "__main__":
         action="store_true",
         default=False,
         help="Visualize the depth image for the 31dof parkour policy (default: False)",
+    )
+    parser.add_argument(
+        "--publish_depth_image",
+        action="store_true",
+        default=False,
+        help="Publish the policy depth image on /debug/depth_image (alias for depth image debug stream)",
     )
     parser.add_argument(
         "--pointcloud_vis",
@@ -266,7 +317,49 @@ if __name__ == "__main__":
         "--debug_policy_io",
         action="store_true",
         default=False,
-        help="Log 31dof parkour raw action and scaled joint targets for debugging (default: False)",
+        help="Print compact policy input/output tensor stats in the terminal (default: False)",
+    )
+    parser.add_argument(
+        "--policy_io_logdir",
+        type=str,
+        default=None,
+        help="Directory to record policy input/output summaries and full .npz tensor samples",
+    )
+    parser.add_argument(
+        "--policy_io_interval",
+        type=float,
+        default=0.5,
+        help="Minimum seconds between policy I/O debug records per agent (default: 0.5)",
+    )
+    parser.add_argument(
+        "--debug_windows",
+        action="store_true",
+        default=False,
+        help="Show live OpenCV windows for the policy depth image and policy I/O summaries",
+    )
+    parser.add_argument(
+        "--record_joint_tracking",
+        action="store_true",
+        default=False,
+        help="Record expected, commanded and actual joint positions for plotting after shutdown",
+    )
+    parser.add_argument(
+        "--joint_tracking_logdir",
+        type=str,
+        default=None,
+        help="Directory to save joint_tracking.npz and joint_tracking.png; defaults under policy_io_logdir when set",
+    )
+    parser.add_argument(
+        "--joint_tracking_interval",
+        type=float,
+        default=0.02,
+        help="Minimum seconds between joint tracking samples (default: 0.02)",
+    )
+    parser.add_argument(
+        "--show_joint_tracking_plot",
+        action="store_true",
+        default=False,
+        help="Show the joint tracking matplotlib figure after shutdown in addition to saving it",
     )
 
     args = parser.parse_args()

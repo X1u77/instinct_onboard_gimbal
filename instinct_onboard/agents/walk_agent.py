@@ -60,6 +60,13 @@ class WalkAgent(OnboardAgent):
         actor_input_name = self.ort_sessions["actor"].get_inputs()[0].name
         action = self.ort_sessions["actor"].run(None, {actor_input_name: normalized_obs})[0]
         action = action.reshape(-1)
+        self._last_actor_io_tensors = {
+            "obs": obs,
+            "actor_input": normalized_obs,
+            "raw_action": action,
+        }
+        if self.__class__ is WalkAgent:
+            self._record_policy_io("actor", self._last_actor_io_tensors)
         done = False  # Continuous walking, no termination
         return action, done
 
@@ -177,4 +184,7 @@ class Body29ActorOn31Agent(WalkAgent):
             return body_action, done
         full_action = np.zeros(self.ros_node.NUM_ACTIONS, dtype=np.float32)
         full_action[self._body_joint_ids] = body_action[: self.BODY_DOF]
+        tensors = dict(getattr(self, "_last_actor_io_tensors", {}))
+        tensors["full_action"] = full_action
+        self._record_policy_io("actor_on31", tensors)
         return full_action, done

@@ -1,8 +1,10 @@
+import json
 import os
 import re
+import time
 from abc import ABC, abstractmethod
 from collections import OrderedDict
-from typing import Callable, Tuple
+from typing import Callable, Dict, Optional, Tuple
 
 import numpy as np
 import yaml
@@ -26,6 +28,12 @@ class OnboardAgent(ABC):
         self.logdir = logdir
         self.ros_node: RealNode = ros_node
         assert isinstance(self.ros_node, RealNode), "ros_node must be an instance of RealNode"
+        self._policy_io_agent_name = self.__class__.__name__
+        self._policy_io_print_enabled = False
+        self._policy_io_logdir = None
+        self._policy_io_interval = 0.5
+        self._policy_io_last_record_time = 0.0
+        self._policy_io_sample_index = 0
         env_yaml = self._resolve_logdir_path("params", "env.yaml")
         with open(env_yaml) as f:
             self.cfg = yaml.unsafe_load(f)
@@ -39,6 +47,132 @@ class OnboardAgent(ABC):
         if os.path.exists(flat_path):
             return flat_path
         return nested_path
+
+    def configure_policy_io_debug(
+        self,
+        *,
+        agent_name: Optional[str] = None,
+        print_enabled: bool = False,
+        logdir: Optional[str] = None,
+        interval: float = 0.5,
+    ):
+        """Configure lightweight policy I/O logging.
+
+        Terminal output prints compact tensor stats. When logdir is set, each
+        recorded frame also writes full tensors into a compressed .npz file and
+        appends one JSONL summary row for quick inspection.
+        """
+        self._policy_io_agent_name = agent_name or self.__class__.__name__
+        self._policy_io_print_enabled = bool(print_enabled)
+        self._policy_io_logdir = logdir
+        self._policy_io_interval = max(float(interval), 0.0)
+        self._policy_io_last_record_time = 0.0
+        self._policy_io_sample_index = 0
+        if self._policy_io_logdir:
+            self._policy_io_agent_dir = os.path.join(self._policy_io_logdir, self._policy_io_agent_name)
+            self._policy_io_sample_dir = os.path.join(self._policy_io_agent_dir, "samples")
+            os.makedirs(self._policy_io_sample_dir, exist_ok=True)
+            self._policy_io_summary_path = os.path.join(self._policy_io_agent_dir, "policy_io_summary.jsonl")
+        else:
+            self._policy_io_agent_dir = None
+            self._policy_io_sample_dir = None
+            self._policy_io_summary_path = None
+
+    @property
+    def policy_io_debug_enabled(self) -> bool:
+        return self._policy_io_print_enabled or bool(self._policy_io_logdir)
+
+    @staticmethod
+    def _policy_io_tensor_stats(value) -> dict:
+        array = np.asarray(value)
+        flat = array.reshape(-1)
+        stats = {
+            "shape": list(array.shape),
+            "dtype": str(array.dtype),
+        }
+        if flat.size == 0:
+            return stats
+        finite = flat[np.isfinite(flat)] if np.issubdtype(array.dtype, np.number) else flat
+        if finite.size == 0:
+            return stats
+        stats.update(
+            {
+                "min": float(np.min(finite)),
+                "max": float(np.max(finite)),
+                "mean": float(np.mean(finite)),
+                "std": float(np.std(finite)),
+                "sample": flat[:8].astype(float).tolist(),
+            }
+        )
+        return stats
+
+    @staticmethod
+    def _policy_io_safe_name(value: str) -> str:
+        return re.sub(r"[^A-Za-z0-9_.-]+", "_", value)
+
+    def _record_policy_io(self, model_name: str, tensors: Dict[str, np.ndarray]):
+        if not self.policy_io_debug_enabled:
+            return
+        now = time.time()
+        if now - self._policy_io_last_record_time < self._policy_io_interval:
+            return
+        self._policy_io_last_record_time = now
+
+        summaries = {name: self._policy_io_tensor_stats(value) for name, value in tensors.items()}
+        sample_file = None
+        if self._policy_io_logdir:
+            safe_model_name = self._policy_io_safe_name(model_name)
+            sample_file = os.path.join(
+                self._policy_io_sample_dir,
+                f"{self._policy_io_sample_index:06d}_{safe_model_name}.npz",
+            )
+            np.savez_compressed(sample_file, **{name: np.asarray(value) for name, value in tensors.items()})
+            row = {
+                "time": now,
+                "agent": self._policy_io_agent_name,
+                "model": model_name,
+                "sample_file": sample_file,
+                "tensors": summaries,
+            }
+            with open(self._policy_io_summary_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(row, ensure_ascii=True) + "\n")
+
+        if self._policy_io_print_enabled:
+            parts = []
+            for name, stats in summaries.items():
+                shape = "x".join(str(dim) for dim in stats["shape"]) or "scalar"
+                if "min" in stats:
+                    parts.append(
+                        f"{name}[{shape}] min={stats['min']:+.3f} max={stats['max']:+.3f} "
+                        f"mean={stats['mean']:+.3f}"
+                    )
+                else:
+                    parts.append(f"{name}[{shape}]")
+            suffix = f" saved={sample_file}" if sample_file else ""
+            self.ros_node.get_logger().info(
+                f"policy_io agent={self._policy_io_agent_name} model={model_name}: "
+                + "; ".join(parts)
+                + suffix
+            )
+        if hasattr(self.ros_node, "update_policy_io_debug_text"):
+            lines = [
+                f"agent={self._policy_io_agent_name} model={model_name}",
+                f"sample={self._policy_io_sample_index} time={now:.3f}",
+            ]
+            if sample_file:
+                lines.append(f"saved={sample_file}")
+            for name, stats in summaries.items():
+                shape = "x".join(str(dim) for dim in stats["shape"]) or "scalar"
+                if "min" in stats:
+                    sample = ", ".join(f"{value:+.3f}" for value in stats.get("sample", [])[:4])
+                    lines.append(
+                        f"{name}[{shape}] min={stats['min']:+.3f} max={stats['max']:+.3f} "
+                        f"mean={stats['mean']:+.3f} std={stats['std']:+.3f} sample=[{sample}]"
+                    )
+                else:
+                    lines.append(f"{name}[{shape}] dtype={stats['dtype']}")
+            self.ros_node.update_policy_io_debug_text(lines)
+        self._policy_io_sample_index += 1
 
     def _parse_action_config(self):
         """Parse control-related configurations from the environment YAML file."""

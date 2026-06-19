@@ -718,6 +718,8 @@ class ParkourAgent(OnboardAgent):
             .reshape(1, -1, self.depth_height, self.depth_width)
             .astype(np.float32)
         )
+        if hasattr(self.ros_node, "show_debug_depth_image"):
+            self.ros_node.show_debug_depth_image(depth_obs[0, -1])
         # if self.depth_vis:
         #     self._vis_depth_obs(depth_obs.reshape(-1, self.depth_height, self.depth_width))
         if self.debug_depth_publisher is not None:
@@ -751,6 +753,18 @@ class ParkourAgent(OnboardAgent):
         full_action = np.zeros(self.ros_node.NUM_ACTIONS, dtype=np.float32)
         full_action[mask] = action
         full_action = self._clip_camera_yaw_pitch_action(full_action)
+        self._record_policy_io(
+            "depth_encoder_actor",
+            {
+                "proprio_obs": proprio_obs,
+                "depth_obs": depth_obs,
+                "depth_embedding": depth_image_output,
+                "actor_input": actor_input,
+                "raw_action": action,
+                "full_action": full_action,
+                "target_joint_pos": full_action * self.action_scale + self.action_offset,
+            },
+        )
         self._debug_policy_io(full_action)
 
         return full_action, False
@@ -1008,6 +1022,8 @@ class Body29DepthOn31Agent(ParkourStandAgent):
             .reshape(1, -1, self.depth_height, self.depth_width)
             .astype(np.float32)
         )
+        if hasattr(self.ros_node, "show_debug_depth_image"):
+            self.ros_node.show_debug_depth_image(depth_obs[0, -1])
         depth_image_output = self.ort_sessions["depth_encoder"].run(
             None, {self.ort_sessions["depth_encoder"].get_inputs()[0].name: depth_obs}
         )[0]
@@ -1017,4 +1033,16 @@ class Body29DepthOn31Agent(ParkourStandAgent):
 
         full_action = np.zeros(self.ros_node.NUM_ACTIONS, dtype=np.float32)
         full_action[self._body_joint_ids] = body_action[: self.BODY_DOF]
+        self._record_policy_io(
+            "depth_encoder_actor_on31",
+            {
+                "proprio_obs": proprio_obs,
+                "depth_obs": depth_obs,
+                "depth_embedding": depth_image_output,
+                "actor_input": actor_input,
+                "body_action": body_action,
+                "full_action": full_action,
+                "target_joint_pos": full_action * self.action_scale + self.action_offset,
+            },
+        )
         return full_action, False

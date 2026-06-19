@@ -1,5 +1,7 @@
 from abc import abstractmethod
 from dataclasses import dataclass
+import os
+import time
 from typing import Optional
 
 import numpy as np
@@ -75,6 +77,16 @@ class RealNode(Node):
         self.torque_limits_ratio = torque_limits_ratio
         self.robot_class_name = robot_class_name
         self.dryrun = dryrun
+        self._debug_windows_enabled = False
+        self._debug_depth_window_enabled = False
+        self._debug_policy_window_enabled = False
+        self._joint_tracking_enabled = False
+        self._joint_tracking_logdir = None
+        self._joint_tracking_interval = 0.02
+        self._joint_tracking_show_plot = False
+        self._joint_tracking_last_time = 0.0
+        self._joint_tracking_start_time = None
+        self._joint_tracking_records = []
         # This is a common joy stick data definition for multi-robot support.
         # Each OEM node should handle how to convert the raw joy stick data to this common definition.
         # Each agent should use this interface to acquire joy stick continuous values and button states.
@@ -126,6 +138,187 @@ class RealNode(Node):
     @property
     def joy_stick_data(self) -> JoyStickData:
         return self._joy_stick_data
+
+    def configure_debug_windows(
+        self,
+        *,
+        enabled: bool = False,
+        show_depth: bool = True,
+        show_policy_io: bool = True,
+    ):
+        self._debug_windows_enabled = bool(enabled)
+        self._debug_depth_window_enabled = bool(enabled and show_depth)
+        self._debug_policy_window_enabled = bool(enabled and show_policy_io)
+
+    def show_debug_depth_image(self, depth_image: np.ndarray):
+        if not self._debug_depth_window_enabled:
+            return
+        try:
+            import cv2
+        except ImportError:
+            self.get_logger().warn("OpenCV is not available, cannot show depth debug window.", once=True)
+            return
+
+        depth = np.asarray(depth_image, dtype=np.float32)
+        finite = depth[np.isfinite(depth)]
+        if finite.size == 0:
+            return
+        low = float(np.min(finite))
+        high = float(np.max(finite))
+        if high - low < 1e-6:
+            high = low + 1.0
+        normalized = np.clip((depth - low) / (high - low), 0.0, 1.0)
+        depth_u8 = (normalized * 255.0).astype(np.uint8)
+        colored = cv2.applyColorMap(depth_u8, cv2.COLORMAP_TURBO)
+        cv2.putText(
+            colored,
+            f"depth min={low:.3f} max={high:.3f}",
+            (8, 22),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (255, 255, 255),
+            1,
+            cv2.LINE_AA,
+        )
+        cv2.imshow("policy depth image", colored)
+        cv2.waitKey(1)
+
+    def update_policy_io_debug_text(self, lines):
+        if not self._debug_policy_window_enabled:
+            return
+        try:
+            import cv2
+        except ImportError:
+            self.get_logger().warn("OpenCV is not available, cannot show policy I/O debug window.", once=True)
+            return
+
+        canvas = np.zeros((520, 1180, 3), dtype=np.uint8)
+        y = 28
+        for line in lines[:22]:
+            cv2.putText(
+                canvas,
+                str(line)[:145],
+                (12, y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.48,
+                (230, 230, 230),
+                1,
+                cv2.LINE_AA,
+            )
+            y += 23
+        cv2.imshow("policy input output summary", canvas)
+        cv2.waitKey(1)
+
+    def close_debug_windows(self):
+        if not self._debug_windows_enabled:
+            return
+        try:
+            import cv2
+        except ImportError:
+            return
+        for window_name in ("policy depth image", "policy input output summary"):
+            try:
+                cv2.destroyWindow(window_name)
+            except Exception:
+                pass
+
+    def configure_joint_tracking(
+        self,
+        *,
+        enabled: bool = False,
+        logdir: Optional[str] = None,
+        interval: float = 0.02,
+        show_plot: bool = False,
+    ):
+        self._joint_tracking_enabled = bool(enabled)
+        self._joint_tracking_logdir = logdir
+        self._joint_tracking_interval = max(float(interval), 0.0)
+        self._joint_tracking_show_plot = bool(show_plot)
+        self._joint_tracking_last_time = 0.0
+        self._joint_tracking_start_time = None
+        self._joint_tracking_records = []
+        if self._joint_tracking_enabled and self._joint_tracking_logdir:
+            os.makedirs(self._joint_tracking_logdir, exist_ok=True)
+
+    def _record_joint_tracking(self, expected_joint_pos, commanded_joint_pos, raw_action):
+        if not self._joint_tracking_enabled:
+            return
+        now = time.time()
+        if now - self._joint_tracking_last_time < self._joint_tracking_interval:
+            return
+        if self._joint_tracking_start_time is None:
+            self._joint_tracking_start_time = now
+        self._joint_tracking_last_time = now
+        self._joint_tracking_records.append(
+            {
+                "time": now - self._joint_tracking_start_time,
+                "expected_joint_pos": np.asarray(expected_joint_pos, dtype=np.float32).copy(),
+                "commanded_joint_pos": np.asarray(commanded_joint_pos, dtype=np.float32).copy(),
+                "actual_joint_pos": np.asarray(self.joint_pos_, dtype=np.float32).copy(),
+                "raw_action": np.asarray(raw_action, dtype=np.float32).copy(),
+            }
+        )
+
+    def finalize_joint_tracking(self):
+        if not self._joint_tracking_enabled or not self._joint_tracking_records:
+            return None
+        logdir = self._joint_tracking_logdir or os.path.join(os.getcwd(), "joint_tracking_logs")
+        os.makedirs(logdir, exist_ok=True)
+        time_data = np.asarray([record["time"] for record in self._joint_tracking_records], dtype=np.float32)
+        expected = np.stack([record["expected_joint_pos"] for record in self._joint_tracking_records])
+        commanded = np.stack([record["commanded_joint_pos"] for record in self._joint_tracking_records])
+        actual = np.stack([record["actual_joint_pos"] for record in self._joint_tracking_records])
+        raw_action = np.stack([record["raw_action"] for record in self._joint_tracking_records])
+        npz_path = os.path.join(logdir, "joint_tracking.npz")
+        np.savez_compressed(
+            npz_path,
+            time=time_data,
+            expected_joint_pos=expected,
+            commanded_joint_pos=commanded,
+            actual_joint_pos=actual,
+            raw_action=raw_action,
+            joint_names=np.asarray(self.sim_joint_names),
+        )
+
+        plot_path = os.path.join(logdir, "joint_tracking.png")
+        try:
+            import matplotlib
+            if not self._joint_tracking_show_plot:
+                matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+
+            cols = 4
+            rows = int(np.ceil(self.NUM_JOINTS / cols))
+            fig, axes = plt.subplots(rows, cols, figsize=(cols * 4.2, rows * 2.5), sharex=True)
+            axes = np.asarray(axes).reshape(-1)
+            for joint_id in range(self.NUM_JOINTS):
+                ax = axes[joint_id]
+                error = expected[:, joint_id] - actual[:, joint_id]
+                ax.plot(time_data, expected[:, joint_id], label="expected", linewidth=1.0)
+                ax.plot(time_data, actual[:, joint_id], label="actual", linewidth=1.0)
+                ax.plot(time_data, error, label="error", linewidth=0.8, alpha=0.8)
+                title = self.sim_joint_names[joint_id]
+                ax.set_title(f"{joint_id}: {title}", fontsize=8)
+                ax.grid(True, linewidth=0.3, alpha=0.5)
+            for ax in axes[self.NUM_JOINTS :]:
+                ax.axis("off")
+            axes[0].legend(fontsize=7)
+            fig.suptitle("Joint tracking: policy target vs motor feedback", fontsize=14)
+            fig.supxlabel("time [s]")
+            fig.supylabel("position [rad]")
+            fig.tight_layout()
+            fig.savefig(plot_path, dpi=160)
+            if self._joint_tracking_show_plot:
+                plt.show()
+            plt.close(fig)
+        except Exception as exc:
+            self.get_logger().warn(f"Failed to create joint tracking plot: {exc}")
+            plot_path = None
+
+        self.get_logger().info(f"Joint tracking data saved to {npz_path}.")
+        if plot_path:
+            self.get_logger().info(f"Joint tracking plot saved to {plot_path}.")
+        return plot_path or npz_path
 
     def publish_auxiliary_static_transforms(self, transform_field_name: str):
         """Publish some additional static transforms that are not part of the robot model.
@@ -220,6 +413,7 @@ class RealNode(Node):
         self.action_publisher.publish(Float32MultiArray(data=action.tolist()))
         action_scaled = action * action_scale
         target_joint_pos = action_scaled + action_offset
+        expected_joint_pos = target_joint_pos.copy()
         p_gains = np.clip(p_gains * self.kp_factor, 0.0, self.kp_clip)
         d_gains = np.clip(d_gains * self.kd_factor, 0.0, self.kd_clip)
         if self.computer_clip_torque:
@@ -228,6 +422,7 @@ class RealNode(Node):
                 p_gains=p_gains,
                 d_gains=d_gains,
             )
+        self._record_joint_tracking(expected_joint_pos, target_joint_pos, action)
         self._publish_motor_cmd(target_joint_pos, p_gains=p_gains, d_gains=d_gains)
 
     @abstractmethod
