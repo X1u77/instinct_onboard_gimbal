@@ -500,6 +500,7 @@ class ParkourAgent(OnboardAgent):
         pointcloud_vis: bool = True,
         initial_speed_scale: float = 0.0,
         debug_policy_io: bool = False,
+        freeze_head: bool = False,
         lin_vel_deadband=0.5,
         lin_vel_range=[0.5, 0.5],
         ang_vel_deadband=0.15,
@@ -510,6 +511,7 @@ class ParkourAgent(OnboardAgent):
         self.speed_scale = float(initial_speed_scale)
         self.current_speed_scale = self.speed_scale
         self.debug_policy_io = debug_policy_io
+        self.freeze_head = bool(freeze_head)
         self._last_policy_io_log_time = 0.0
         self.lin_vel_deadband = lin_vel_deadband
         self.ang_vel_deadband = ang_vel_deadband
@@ -757,6 +759,10 @@ class ParkourAgent(OnboardAgent):
         mask = (self._zero_action_joints == 0).astype(bool)
         full_action = np.zeros(self.ros_node.NUM_ACTIONS, dtype=np.float32)
         full_action[mask] = action
+        if self.freeze_head and self._camera_action_joint_ids is not None:
+            # With use_default_offset=True, zero raw camera action commands the
+            # training default pose (yaw=0, pitch=50 degrees).
+            full_action[self._camera_action_joint_ids] = 0.0
         full_action = self._clip_camera_yaw_pitch_action(full_action)
         self._debug_policy_io(full_action)
 

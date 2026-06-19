@@ -191,6 +191,8 @@ def main(args):
         parkour_kwargs["initial_speed_scale"] = 0.0
     if "debug_policy_io" in parkour_signature.parameters:
         parkour_kwargs["debug_policy_io"] = args.debug_policy_io
+    if "freeze_head" in parkour_signature.parameters:
+        parkour_kwargs["freeze_head"] = args.parkour_freeze_head
 
     parkour_agent = ParkourAgent(**parkour_kwargs)
     node.parkour_blend_duration = max(0.0, args.parkour_blend_duration)
@@ -243,6 +245,12 @@ if __name__ == "__main__":
     parser.add_argument("--stand_logdir", type=str, help="Directory to load the 29dof stand agent from")
     parser.add_argument("--walk_logdir", type=str, help="Directory to load the 29dof walk agent from")
     parser.add_argument("--logdir", type=str, help="Directory to load the 31dof parkour agent from")
+    parser.add_argument(
+        "--parkour_freeze_head",
+        action="store_true",
+        default=False,
+        help="Keep parkour head yaw/pitch at the training default pose",
+    )
     parser.add_argument(
         "--parkour_blend_duration",
         type=float,
