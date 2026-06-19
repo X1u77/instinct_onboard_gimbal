@@ -717,8 +717,10 @@ class ParkourAgent(OnboardAgent):
         print(f"Loaded ONNX models from {self.logdir}")
 
     def reset(self):
-        """Reset the agent state and the rosbag reader."""
-        pass
+        """Reset policy observation history when switching into this agent."""
+        super().reset()
+        if hasattr(self, "depth_image_buffer"):
+            self.depth_image_buffer.reset()
 
     def step(self):
         """Perform a single step of the agent."""
