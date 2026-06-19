@@ -500,6 +500,7 @@ class ParkourAgent(OnboardAgent):
         pointcloud_vis: bool = True,
         initial_speed_scale: float = 0.0,
         debug_policy_io: bool = False,
+        lock_head_to_default: bool = False,
         lin_vel_deadband=0.5,
         lin_vel_range=[0.5, 0.5],
         ang_vel_deadband=0.15,
@@ -510,6 +511,7 @@ class ParkourAgent(OnboardAgent):
         self.speed_scale = float(initial_speed_scale)
         self.current_speed_scale = self.speed_scale
         self.debug_policy_io = debug_policy_io
+        self.lock_head_to_default = lock_head_to_default
         self._last_policy_io_log_time = 0.0
         self.lin_vel_deadband = lin_vel_deadband
         self.ang_vel_deadband = ang_vel_deadband
@@ -611,6 +613,20 @@ class ParkourAgent(OnboardAgent):
         action[joint_ids[nonzero]] = (
             (target[nonzero] - self._action_offset[joint_ids[nonzero]]) / scale[nonzero]
         )
+        return action
+
+    def _lock_head_action_to_default(self, action: np.ndarray) -> np.ndarray:
+        """Force camera/head action to the same fixed target used by body-only modes."""
+        if not self.lock_head_to_default or self._camera_action_joint_ids is None:
+            return action
+        joint_ids = self._camera_action_joint_ids
+        target = robot_cfgs.G1_31Dof_TorsoBase.head_default_joint_pos[: len(joint_ids)].astype(np.float32)
+        scale = self._action_scale[joint_ids]
+        nonzero = np.abs(scale) > 1e-8
+        action[joint_ids[nonzero]] = (
+            (target[nonzero] - self._action_offset[joint_ids[nonzero]]) / scale[nonzero]
+        )
+        action[joint_ids[~nonzero]] = 0.0
         return action
 
     def _parse_depth_image_config(self):
@@ -753,6 +769,7 @@ class ParkourAgent(OnboardAgent):
         full_action = np.zeros(self.ros_node.NUM_ACTIONS, dtype=np.float32)
         full_action[mask] = action
         full_action = self._clip_camera_yaw_pitch_action(full_action)
+        full_action = self._lock_head_action_to_default(full_action)
         self._record_policy_io(
             "depth_encoder_actor",
             {

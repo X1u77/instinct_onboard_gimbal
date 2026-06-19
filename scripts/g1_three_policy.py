@@ -169,6 +169,8 @@ def main(args):
         parkour_kwargs["initial_speed_scale"] = 0.0
     if "debug_policy_io" in parkour_signature.parameters:
         parkour_kwargs["debug_policy_io"] = args.debug_policy_io
+    if "lock_head_to_default" in parkour_signature.parameters:
+        parkour_kwargs["lock_head_to_default"] = args.lock_parkour_head
 
     parkour_agent = ParkourAgent(**parkour_kwargs)
     if hasattr(parkour_agent, "set_speed_scale"):
@@ -364,6 +366,12 @@ if __name__ == "__main__":
         action="store_true",
         default=False,
         help="Show the joint tracking matplotlib figure after shutdown in addition to saving it",
+    )
+    parser.add_argument(
+        "--lock_parkour_head",
+        action="store_true",
+        default=False,
+        help="Force parkour head_yaw/head_pitch targets to the walk-mode default head pose",
     )
 
     args = parser.parse_args()
