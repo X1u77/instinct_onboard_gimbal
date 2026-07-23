@@ -98,10 +98,10 @@ fuser -v "$G1_HEAD_PORT"
 
 ## 2. 检查软件、模型和硬件
 
-### 2.1 加载ROS2和Unitree消息环境
+### 2.1 加载ROS2 Foxy和Unitree消息环境
 
 ```bash
-source /opt/ros/humble/setup.bash
+source /opt/ros/foxy/setup.bash
 ```
 
 如果Unitree消息是从工作空间编译的，还需要加载对应工作空间，例如：
@@ -383,7 +383,7 @@ has_calibrate: 1
 
 ```bash
 cd "$G1_DEPLOY_REPO/g1_comp_servo_service"
-source /opt/ros/humble/setup.bash
+source /opt/ros/foxy/setup.bash
 source "$G1_UNITREE_SETUP"
 export ROS_DOMAIN_ID=42
 
@@ -402,7 +402,7 @@ server启动后会设置P/D增益并持续发布状态，但在收到有效 `mod
 ### 7.2 终端B：检查DDS
 
 ```bash
-source /opt/ros/humble/setup.bash
+source /opt/ros/foxy/setup.bash
 source "$G1_UNITREE_SETUP"
 export ROS_DOMAIN_ID=42
 
@@ -437,7 +437,7 @@ Dry-run用于检查模型、观测、D455和状态机，不发送真实身体或
 
 ```bash
 cd "$G1_DEPLOY_REPO"
-source /opt/ros/humble/setup.bash
+source /opt/ros/foxy/setup.bash
 source "$G1_UNITREE_SETUP"
 export ROS_DOMAIN_ID=42
 
@@ -497,7 +497,7 @@ Node shutdown complete.
 
 ```bash
 cd "$G1_DEPLOY_REPO"
-source /opt/ros/humble/setup.bash
+source /opt/ros/foxy/setup.bash
 source "$G1_UNITREE_SETUP"
 export ROS_DOMAIN_ID=42
 
@@ -638,7 +638,7 @@ python scripts/g1_three_policy.py \
 
 ```bash
 cd "$G1_DEPLOY_REPO/g1_comp_servo_service"
-source /opt/ros/humble/setup.bash
+source /opt/ros/foxy/setup.bash
 source "$G1_UNITREE_SETUP"
 export ROS_DOMAIN_ID=42
 
@@ -653,7 +653,7 @@ export ROS_DOMAIN_ID=42
 
 ```bash
 cd "$G1_DEPLOY_REPO"
-source /opt/ros/humble/setup.bash
+source /opt/ros/foxy/setup.bash
 source "$G1_UNITREE_SETUP"
 export ROS_DOMAIN_ID=42
 
@@ -679,7 +679,7 @@ python scripts/g1_three_policy.py \
 可以在第三个终端检查：
 
 ```bash
-source /opt/ros/humble/setup.bash
+source /opt/ros/foxy/setup.bash
 export ROS_DOMAIN_ID=42
 
 ros2 topic hz /lowstate

@@ -23,7 +23,7 @@ G1-Comp首次上真机请先完整执行
 
 ## 概述
 
-本仓库包含 Unitree G1 人形机器人在 ROS2 Humble 环境下的完整真机部署代码，支持三种运行模式：
+本仓库包含 Unitree G1 人形机器人在 ROS2 Foxy 环境下的完整真机部署代码，支持三种运行模式：
 
 | 模式 | 脚本 | 说明 |
 |------|------|------|
@@ -34,7 +34,7 @@ G1-Comp首次上真机请先完整执行
 **架构概览：**
 
 ```
-ROS2 (Humble)
+ROS2 (Foxy)
 ├── UnitreeNode          ← 机器人 ROS 接口（关节状态、IMU、遥操作）
 ├── RsCameraNodeMixin    ← RealSense 相机节点（深度图 IPC）
 ├── ParkourAgent         ← 跑酷策略（ONNX actor + depth encoder）
@@ -70,19 +70,19 @@ ROS2 (Humble)
 ### 工控机要求
 
 - NVIDIA GPU
-- Ubuntu 22.04 + ROS2 Humble
+- Ubuntu 20.04 + ROS2 Foxy
 
 ---
 
 ## 软件环境
 
-### 1. ROS2 Humble
+### 1. ROS2 Foxy
 
-参考官方文档安装：https://docs.ros.org/en/humble/Installation.html
+参考官方文档安装：https://docs.ros.org/en/foxy/Installation.html
 
 ```bash
-sudo apt update && sudo apt install ros-humble-desktop
-source /opt/ros/humble/setup.bash
+sudo apt update && sudo apt install ros-foxy-desktop
+source /opt/ros/foxy/setup.bash
 ```
 
 ### 2. 依赖安装
@@ -106,11 +106,11 @@ pip install onnxruntime      # CPU 版本
 ### 3. ROS2 功能包
 
 ```bash
-# Unitree 机器人接口
-sudo apt install ros-humble-unitree-go ros-humble-unitree-hg
+# Unitree机器人接口使用G1上已编译的Unitree ROS2工作空间
+source /absolute/path/to/unitree_ros2/install/setup.bash
 
 # Realsense SDK
-sudo apt install librealsense2-dev ros-humble-realsense2-camera
+sudo apt install librealsense2-dev ros-foxy-realsense2-camera
 # 或从源码编译 pyrealsense2
 pip install pyrealsense2
 
@@ -266,7 +266,7 @@ python scripts/rs_cam_test.py
 ```bash
 # 终端 1：启动 ROS
 ros2 run demo_nodes_cpp listener &
-source /opt/ros/humble/setup.bash
+source /opt/ros/foxy/setup.bash
 export ROS_DOMAIN_ID=42
 ```
 
@@ -321,7 +321,7 @@ python scripts/g1_perceptive_track.py \
 
 ```bash
 # 终端 1
-source /opt/ros/humble/setup.bash
+source /opt/ros/foxy/setup.bash
 export ROS_DOMAIN_ID=42
 ros2 daemon start
 ```
@@ -349,7 +349,7 @@ ros2 launch realsense2_camera rs_launch.py \
 ```bash
 # 终端 4
 cd instinct_onboard_gimbal
-source /opt/ros/humble/setup.bash
+source /opt/ros/foxy/setup.bash
 export ROS_DOMAIN_ID=42
 
 # 跑酷模式（推荐首次运行）
@@ -583,8 +583,8 @@ python instinct_onboard/test_servo.py --dryrun
 Unitree 消息包未安装或未 source：
 
 ```bash
-sudo apt install ros-humble-unitree-go ros-humble-unitree-hg
-source /opt/ros/humble/setup.bash
+source /opt/ros/foxy/setup.bash
+source /absolute/path/to/unitree_ros2/install/setup.bash
 ```
 
 ### Q2: `RuntimeError: Camera process is not alive`
@@ -672,7 +672,7 @@ ros2 topic hz /lowstate
 终端1：
 
 ```bash
-source /opt/ros/humble/setup.bash
+source /opt/ros/foxy/setup.bash
 export ROS_DOMAIN_ID=42
 g1_comp_servo_service/build/main \
     --network eth0 \
@@ -684,7 +684,7 @@ g1_comp_servo_service/build/main \
 终端2：
 
 ```bash
-source /opt/ros/humble/setup.bash
+source /opt/ros/foxy/setup.bash
 export ROS_DOMAIN_ID=42
 export CUDA_VISIBLE_DEVICES=0
 python scripts/g1_three_policy.py \
