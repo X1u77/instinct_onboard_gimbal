@@ -1,152 +1,159 @@
-# G1 单 Policy 部署说明
+# G1 Three-Policy 新头部部署
 
-当前 `scripts/g1_three_policy.py` 已经改成单一 `31DoF parkour policy` 部署脚本。
+`scripts/g1_three_policy.py` 同时运行三套策略：
 
-不再包含：
+- `stand`：原29-DoF模型，只控制身体关节。
+- `walk`：原29-DoF模型，只控制身体关节。
+- `parkour`：基于 Humanoid-Monument-Valley `G1Comp` 配置训练的新头部31-DoF模型。
 
-- `29DoF stand`
-- `29DoF parkour`
-- 多 policy 切换逻辑
-
-现在只有一个 `31DoF parkour` policy，通过两个按键切换两个固定速度档位。
-
-## 入口脚本
-
-```bash
-python scripts/g1_three_policy.py
-```
-
-## 启动命令
-
-Dry-run：
-
-```bash
-cd ~/hmv_deploy
-source hmv_venv/bin/activate
-source ~/unitree_ros2/setup_g1_foxy.sh
-export PYTHONPATH=/home/unitree/ros2_numpy:$PYTHONPATH
-
-python scripts/g1_three_policy.py \
-    --logdir /home/unitree/hmv_policy \
-    --gimbal
-```
-
-真机：
-
-```bash
-cd ~/hmv_deploy
-source hmv_venv/bin/activate
-source ~/unitree_ros2/setup_g1_foxy.sh
-export PYTHONPATH=/home/unitree/ros2_numpy:$PYTHONPATH
-
-python scripts/g1_three_policy.py \
-    --stand_logdir "/home/unitree/29dof_walk" \
-    --logdir "/home/unitree/hmv_policy" \
-    --gimbal \
-    --nodryrun
-
-python scripts/g1_three_policy.py \
-    --stand_logdir "/home/unitree/stand_onboard" \
-    --walk_logdir "/home/unitree/29dof_walk" \
-    --logdir "/home/unitree/hmv_policy" \
-    --gimbal_port /dev/ttyUSB1\
-    --gimbal \
-    --nodryrun
-```
-
-如果云台串口不是默认值 `/dev/ttyUSB0`，再补：
-
-```bash
---gimbal_port /dev/ttyUSB1
-```
-
-## 路径说明
-
-- `--logdir`：31DoF parkour policy 目录
-- 当前代码兼容两种目录结构：
-  - 标准结构：`params/env.yaml`、`params/agent.yaml`、`exported/actor.onnx`、`exported/0-depth_encoder.onnx`
-  - 平铺结构：`env.yaml`、`agent.yaml`、`actor.onnx`、`0-depth_encoder.onnx`
-
-你现在这套 policy 可以直接传：
-
-```bash
---logdir /home/unitree/hmv_deploy/policy
-```
-
-## 相机
-
-这个脚本现在默认固定使用唯一的 RealSense：
+29-DoF策略运行时，policy的观测和动作仍然只有29维。部署层仅为统一31关节
+下发接口补出两维固定头部目标：
 
 ```text
-420122071680
+head_yaw   = 0 rad
+head_pitch = 0 rad
 ```
 
-所以启动命令里不再需要传 `--camera_serial`。
+只有31-DoF parkour policy 会读取和控制头部。其 raw head action 为零时，对应训练
+配置的默认位置 `yaw=0、pitch=-0.0926646 rad（约 -5.31°）`。
 
-## 状态机
+## 模型目录
 
-脚本启动后流程如下：
+```text
+stand_logdir/
+├── params/env.yaml
+└── exported/...
 
-1. 自动进入 `ColdStart`
-2. `ColdStart` 完成后，自动进入唯一的 `31DoF parkour policy`
-3. 之后通过按键切换速度档位
+walk_logdir/
+├── params/env.yaml
+└── exported/actor.onnx
 
-## 按键
+parkour_logdir/
+├── params/env.yaml
+├── params/agent.yaml
+├── exported/actor.onnx
+└── exported/0-depth_encoder.onnx
+```
 
-在 `ColdStart` 完成并进入 policy 后：
+Parkour 目录也兼容四个文件直接平铺在同一目录的旧格式。
 
-- `R1`：设置 `speed_scale = 0.0`
-- `L1`：设置 `speed_scale = 0.5`
+## 推荐启动流程
 
-含义：
-
-- `speed_scale = 0.0`：站立/不前进
-- `speed_scale = 0.5`：以训练时最大前进速度的一半运行
-
-这套 policy 的训练配置里：
-
-- `max_velocity = 1.5 m/s`
-
-因此：
-
-- `scale = 0.0` -> `target_vx = 0.0 m/s`
-- `scale = 0.5` -> `target_vx = 0.75 m/s`
-
-## 急停
-
-仍然沿用底层 `UnitreeNode` 的急停逻辑：
-
-- `R2`：急停
-- `L2`：急停
-
-任一按下都会停电机并退出进程。
-
-## 当前实现说明
-
-- 机器人配置：`G1_31Dof_TorsoBase`
-- 头部两自由度由云台控制
-- `velocity_commands` 已按训练配置改成 1 维 `speed_scale`
-- 不再向 policy 输入 3 维遥控速度
-
-## 推荐使用方式
-
-建议流程：
-
-1. 上电后先启动脚本
-2. 等 `ColdStart` 完成
-3. 先按 `R1`，确认 `scale=0.0` 时站稳
-4. 再按 `L1`，切到 `scale=0.5`
-
-## 当前命令模板
+部署直接使用仓库中的官方 `g1_comp_servo_service`。先编译并完成三段式标定：
 
 ```bash
-cd ~/hmv_deploy
-source hmv_venv/bin/activate
-source ~/unitree_ros2/setup_g1_foxy.sh
-export PYTHONPATH=/home/unitree/ros2_numpy:$PYTHONPATH
+cd /home/huo/code/instinct_onboard_gimbal/g1_comp_servo_service
+sudo apt install libyaml-cpp-dev libspdlog-dev
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
+./build/test_calibration --serial /dev/ttyUSB0 --config ./config/config.yaml
+```
 
+必须确认生成的 `config.yaml` 中：
+
+```yaml
+joint0: [-50, 50]
+joint1: [-20, 85]
+direction: [1, -1]
+has_calibrate: 1
+```
+
+然后单独启动官方串口到DDS服务：
+
+```bash
+./build/main \
+  --network eth0 \
+  --domain "${ROS_DOMAIN_ID:-0}" \
+  --serial /dev/ttyUSB0 \
+  --config ./config/config.yaml
+```
+
+`eth0`应替换为机器人DDS使用的网卡，domain必须与three-policy一致。
+服务负责DYNAMIXEL SDK、1 Mbps串口、
+标定换算、P/D增益和扭矩使能；three-policy只收发DDS命令和状态。
+
+three-policy dry-run只检查模型、观测和相机流程，不会连接或控制头部server：
+
+```bash
 python scripts/g1_three_policy.py \
-    --logdir /home/unitree/hmv_deploy/policy \
-    --gimbal \
-    --nodryrun
+  --stand_logdir /path/to/29dof_stand \
+  --walk_logdir /path/to/29dof_walk \
+  --logdir /path/to/31dof_d455_parkour \
+  --gimbal \
+  --debug_policy_io
+```
+
+先用下文的官方 `test_read_angle` 核对头部反馈方向，再启动server并运行真机：
+
+```bash
+python scripts/g1_three_policy.py \
+  --stand_logdir /path/to/29dof_stand \
+  --walk_logdir /path/to/29dof_walk \
+  --logdir /path/to/31dof_d455_parkour \
+  --gimbal \
+  --nodryrun
+```
+
+未标定或 `has_calibrate != 1` 时，官方服务会拒绝启动。three-policy真机模式会等待
+服务的第一帧状态反馈；未启动服务时不会进入控制循环。
+
+D455 默认自动选择第一台设备，默认深度流为 `848×480 @ 60 FPS`。多相机时指定：
+
+```bash
+--camera_serial <D455_SERIAL>
+```
+
+相机不支持默认 profile 时，可显式设置：
+
+```bash
+--camera_width 848 --camera_height 480 --camera_fps 30
+```
+
+## 状态机按键
+
+- ColdStart 完成后：
+  - `R1`：进入29-DoF stand。
+  - `A`：进入29-DoF walk。
+  - `L1`：进入31-DoF parkour。
+- 任意策略中仍可用上述按键切换。
+- `R2` 或 `L2`：急停。
+
+进入 parkour 时默认用0.5秒从当前31关节位置平滑过渡，可用
+`--parkour_blend_duration` 调整。`--parkour_freeze_head` 可用于标定，
+它会令 parkour 策略也保持新头部默认姿态。
+
+真机模式会等待第一帧云台反馈；运行中反馈超过1秒未更新会立即停止电机命令。
+云台连接失败时程序拒绝进入31-DoF部署。parkour运行时D455深度帧超过1秒未更新
+也会停止电机命令。
+
+## 新头部坐标约定
+
+新 URDF 的两个轴为：
+
+```text
+head_yaw_joint:   axis = (0, 0, -1)，仿真正方向向右
+head_pitch_joint: axis = (0, -1, 0)，仿真正方向向上
+```
+
+按照文档规定在joint0最右端、joint1最下端执行标定后，官方server源码实际输出：
+
+```text
+joint0/yaw:   -50°（右）到 +50°（左）
+joint1/pitch: -20°（俯）到 +85°（仰）
+```
+
+官方 `utilities.h` 把两个calibration encoder都定义为各自关节下限，因此
+joint0服务坐标与新URDF yaw方向相反，joint1与URDF pitch方向一致：
+
+```text
+yaw_sign   = -1
+pitch_sign = +1
+```
+
+调试角度反馈直接使用官方程序：
+
+```bash
+./g1_comp_servo_service/build/test_read_angle \
+  --serial /dev/ttyUSB0 \
+  --config ./g1_comp_servo_service/config/config.yaml
 ```

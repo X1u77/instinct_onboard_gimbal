@@ -14,6 +14,7 @@ from .controller import (
     ServoConfig,
     GimbalController,
 )
+from .g1_comp import G1CompServoServiceController
 
 from .gimbal_node import GimbalNode
 
@@ -29,6 +30,7 @@ __all__ = [
     'ServoController',
     'ServoConfig',
     'GimbalController',
+    'G1CompServoServiceController',
     # ROS Node
     'GimbalNode',
 ]

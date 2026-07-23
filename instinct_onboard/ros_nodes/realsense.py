@@ -156,6 +156,8 @@ class RsCameraNodeMixin:
         self.camera_process = None
         self.request_queue = None
         self.result_queue = None
+        self._last_rs_timestamp = 0.0
+        self._last_camera_delay_log_time = 0.0
         self.initialize_camera()
 
     def initialize_camera(self):
@@ -250,22 +252,37 @@ class RsCameraNodeMixin:
             # Dump queue and get latest
             if self.rs_shared_header.writer_status == 0:
                 rs_timestamp = self.rs_shared_header.timestamp
-                self.rs_depth_data[:] = self.rs_image_buffer
-                # self.get_logger().info(
-                #     f"Realsense depth data delayed: {(time.time() - rs_timestamp):.4f} s."
-                # )
-                if rs_timestamp > 0:
+                if rs_timestamp > self._last_rs_timestamp:
+                    candidate = self.rs_image_buffer.copy()
+                    # Verify the writer did not start a new frame while the
+                    # image was being copied.
+                    if (
+                        self.rs_shared_header.writer_status == 0
+                        and self.rs_shared_header.timestamp == rs_timestamp
+                    ):
+                        self.rs_depth_data[:] = candidate
+                        self._last_rs_timestamp = rs_timestamp
+                        refreshed = True
+                now = time.time()
+                if rs_timestamp > 0 and now - self._last_camera_delay_log_time >= 5.0:
                     self.get_logger().info(
-                       f"Realsense depth data delayed: {(time.time() - rs_timestamp):.4f} s." 
+                        f"RealSense depth data delay: {(now - rs_timestamp):.4f} s."
                     )
-                refreshed = True
+                    self._last_camera_delay_log_time = now
             self.rs_data_fresh_counter += 1
         else:
             if self.camera is None:
                 self.handle_camera_dead_behavior()
-            self.rs_depth_data = self.camera.get_camera_data()  # (height, width)
-            refreshed = True
+            camera_data = self.camera.get_camera_data()  # (height, width)
+            if camera_data is not None:
+                self.rs_depth_data = camera_data
+                self._last_rs_timestamp = time.time()
+                refreshed = True
         return refreshed
+
+    def rs_data_is_fresh(self, max_age_s: float = 1.0) -> bool:
+        """Return whether a complete depth frame was received recently."""
+        return self._last_rs_timestamp > 0.0 and time.time() - self._last_rs_timestamp <= max_age_s
 
     def destroy_node(self):
         if self.camera_individual_process and self.camera_process:

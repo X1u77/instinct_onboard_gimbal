@@ -581,3 +581,45 @@ class G1_31Dof_TorsoBase:
         "parent_frame": "torso_link",
         "child_frame": "realsense_depth_link",
     }
+
+
+class G1_31Dof_D455(G1_31Dof_TorsoBase):
+    """G1 body with the revised two-axis head and an Intel RealSense D455.
+
+    This profile matches ``G1_31DOF_D455_CFG`` in Humanoid-Monument-Valley.
+    The body joint order is unchanged.  Only the head zero pose, axes, limits,
+    and camera frame differ from the legacy retrofit head.
+
+    The official service maps each calibration encoder to the configured lower
+    limit.  Its joint0 coordinate is therefore opposite to the revised URDF
+    yaw coordinate, while joint1 already matches the URDF pitch coordinate.
+    """
+
+    head_default_joint_pos = np.array(
+        [0.0, -0.09266462599716477],
+        dtype=np.float32,
+    )
+
+    joint_signs = G1_31Dof_TorsoBase.joint_signs.copy()
+    joint_signs[29:] = np.array([-1.0, 1.0], dtype=np.float32)
+
+    joint_limits_high = G1_31Dof_TorsoBase.joint_limits_high.copy()
+    joint_limits_high[29:] = np.array([0.8727, 1.57], dtype=np.float32)
+    joint_limits_low = G1_31Dof_TorsoBase.joint_limits_low.copy()
+    joint_limits_low[29:] = np.array([-0.8727, -0.3491], dtype=np.float32)
+
+    # Values used by the revised training configuration and deployment CLI.
+    camera_depth_fov = (86.0, 57.0)
+    camera_depth_range = (0.4, 2.5)
+    camera_action_yaw_range = (0.0, 0.0)
+    camera_action_pitch_range = (-0.2671975511965976, 0.5)
+
+    # The point cloud helper publishes points in a robot-style camera frame
+    # (+X forward, +Y left, +Z up).  Attach that frame to the moving D455 link;
+    # the yaw/pitch joints themselves must be published by robot_state_publisher.
+    realsense_depth_link_transform = {
+        "translation": (0.0, 0.0, 0.0),
+        "rotation": (1.0, 0.0, 0.0, 0.0),
+        "parent_frame": "d455_link",
+        "child_frame": "realsense_depth_link",
+    }

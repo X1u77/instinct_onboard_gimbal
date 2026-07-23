@@ -15,8 +15,9 @@ from instinct_onboard.ros_nodes.base import RealNode
 class UnitreeNode(RealNode):
     """This is the implementation of the Unitree robot ROS interface.
     Supports both 29-DOF (standard G1) and 31-DOF (G1 with head gimbal).
-    When using 31-DOF, set enable_gimbal=True to integrate UART-servo controlled
-    head joints (head_yaw, head_pitch).
+    When using 31-DOF, set enable_gimbal=True to integrate serially controlled
+    head joints (head_yaw, head_pitch).  The current three-policy entry uses
+    Unitree's official G1-Comp DDS servo service.
     """
 
     def __init__(
@@ -26,6 +27,7 @@ class UnitreeNode(RealNode):
         imu_state_topic: str = "/secondary_imu",
         joy_stick_topic: str = "/wirelesscontroller",
         enable_gimbal: bool = False,
+        gimbal_backend: str = "legacy",
         gimbal_serial_port: str = "/dev/ttyUSB0",
         gimbal_pan_servo_id: int = 0,
         gimbal_tilt_servo_id: int = 1,
@@ -34,6 +36,7 @@ class UnitreeNode(RealNode):
         **kwargs,
     ):
         self.enable_gimbal = enable_gimbal
+        self.gimbal_backend = gimbal_backend
         self.gimbal_serial_port = gimbal_serial_port
         self.gimbal_pan_servo_id = gimbal_pan_servo_id
         self.gimbal_tilt_servo_id = gimbal_tilt_servo_id
@@ -68,7 +71,13 @@ class UnitreeNode(RealNode):
         # load robot-specific configurations
         self.joint_map = getattr(robot_cfgs, self.robot_class_name).joint_map
         self.real_joint_names = getattr(robot_cfgs, self.robot_class_name).real_joint_names
-        self.joint_signs = getattr(robot_cfgs, self.robot_class_name).joint_signs
+        # Copy because deployment profiles may override head calibration at
+        # runtime; never mutate the module-level robot configuration.
+        self.joint_signs = np.array(
+            getattr(robot_cfgs, self.robot_class_name).joint_signs,
+            dtype=np.float32,
+            copy=True,
+        )
         self.turn_on_motor_mode = getattr(robot_cfgs, self.robot_class_name).turn_on_motor_mode
         self.mode_pr = getattr(robot_cfgs, self.robot_class_name).mode_pr
         self._gimbal_joint_pos[:] = getattr(
@@ -94,34 +103,53 @@ class UnitreeNode(RealNode):
             return
 
         try:
-            from instinct_onboard.servo import GimbalController
-            self.gimbal = GimbalController(
-                serial_port=self.gimbal_serial_port,
-                pan_servo_id=self.gimbal_pan_servo_id,
-                tilt_servo_id=self.gimbal_tilt_servo_id,
-                pan_range=self.gimbal_pan_range,
-                tilt_range=self.gimbal_tilt_range,
-                use_dryrun=self.dryrun,
-            )
+            if self.gimbal_backend == "g1_comp_service":
+                from instinct_onboard.servo import G1CompServoServiceController
+
+                self.gimbal = G1CompServoServiceController(
+                    ros_node=self,
+                    use_dryrun=self.dryrun,
+                )
+                self.gimbal_pan_range = tuple(self.gimbal.pan_range)
+                self.gimbal_tilt_range = tuple(self.gimbal.tilt_range)
+            elif self.gimbal_backend == "legacy":
+                from instinct_onboard.servo import GimbalController
+
+                self.gimbal = GimbalController(
+                    serial_port=self.gimbal_serial_port,
+                    pan_servo_id=self.gimbal_pan_servo_id,
+                    tilt_servo_id=self.gimbal_tilt_servo_id,
+                    pan_range=self.gimbal_pan_range,
+                    tilt_range=self.gimbal_tilt_range,
+                    use_dryrun=self.dryrun,
+                )
+            else:
+                raise ValueError(f"Unsupported gimbal backend: {self.gimbal_backend!r}")
             if not self.dryrun:
                 if self.gimbal.connect():
-                    self.get_logger().info(
-                        f"Gimbal connected on {self.gimbal_serial_port}, "
-                        f"pan servo={self.gimbal_pan_servo_id}, tilt servo={self.gimbal_tilt_servo_id}"
-                    )
+                    if self.gimbal_backend == "g1_comp_service":
+                        self.get_logger().info(
+                            "G1-Comp DDS bridge started; waiting for official servo-service feedback."
+                        )
+                    else:
+                        self.get_logger().info(
+                            f"Gimbal backend={self.gimbal_backend} connected on {self.gimbal_serial_port} "
+                            f"with pan servo={self.gimbal_pan_servo_id}, "
+                            f"tilt servo={self.gimbal_tilt_servo_id}"
+                        )
                     self._start_gimbal_reader()
                     self._start_gimbal_writer()
                 else:
                     self.get_logger().error(f"Failed to connect gimbal on {self.gimbal_serial_port}")
                     self.gimbal = None
             else:
-                self.get_logger().warn("Gimbal running in dryrun mode")
+                self.get_logger().warn(f"Gimbal backend={self.gimbal_backend} running in dryrun mode")
         except Exception as e:
             self.get_logger().error(f"Failed to initialize gimbal: {e}")
             self.gimbal = None
 
     def _start_gimbal_reader(self):
-        """Read UART servo feedback in the background so LowState callbacks stay fast."""
+        """Read head-servo feedback in the background so LowState callbacks stay fast."""
         if self.gimbal is None or self.dryrun:
             return
         if self._gimbal_reader_thread is not None and self._gimbal_reader_thread.is_alive():
@@ -164,6 +192,14 @@ class UnitreeNode(RealNode):
         except Exception as e:
             self.get_logger().warn(f"Failed to read gimbal feedback: {e}")
 
+    def gimbal_feedback_is_fresh(self, max_age_s: float = 1.0) -> bool:
+        """Return whether a recent measured head state is available."""
+        if not self.enable_gimbal or self.gimbal is None:
+            return False
+        with self._gimbal_lock:
+            last_read_time = self._gimbal_last_read_time
+        return last_read_time > 0.0 and time.time() - last_read_time <= max_age_s
+
     def _stop_gimbal_reader(self):
         self._gimbal_reader_stop.set()
         if self._gimbal_reader_thread is not None:
@@ -171,7 +207,7 @@ class UnitreeNode(RealNode):
             self._gimbal_reader_thread = None
 
     def _start_gimbal_writer(self):
-        """Write UART servo commands in the background so body LowCmd is never blocked."""
+        """Write head-servo commands in the background so body LowCmd is never blocked."""
         if self.gimbal is None or self.dryrun:
             return
         if self._gimbal_writer_thread is not None and self._gimbal_writer_thread.is_alive():
@@ -264,6 +300,8 @@ class UnitreeNode(RealNode):
         buffer_ready = hasattr(self, "low_state_buffer") and self.joy_stick_data.lx is not None
         if self.imu_state_topic is not None:
             buffer_ready = buffer_ready and hasattr(self, "torso_imu_buffer")
+        if self.enable_gimbal and not self.dryrun:
+            buffer_ready = buffer_ready and self.gimbal_feedback_is_fresh()
         return buffer_ready
 
     """
@@ -439,19 +477,16 @@ class UnitreeNode(RealNode):
         if self.NUM_JOINTS < 31 or len(target_joint_pos) < 31:
             return
 
-        # head_yaw (sim_idx=29): sim radians -> servo degrees
-        # joint_signs[29] = -1 (sim=left+ -> servo=right+)
+        # The active robot profile defines the sim-to-servo direction.
         head_yaw_sim = target_joint_pos[29]
         head_yaw_servo_deg = np.rad2deg(head_yaw_sim) * self.joint_signs[29]
 
-        # head_pitch (sim_idx=30): sim radians -> servo degrees
-        # joint_signs[30] = +1 (same direction)
         head_pitch_sim = target_joint_pos[30]
         head_pitch_servo_deg = np.rad2deg(head_pitch_sim) * self.joint_signs[30]
 
         with self._gimbal_lock:
             # Do not overwrite measured feedback with the commanded target.
-            # _gimbal_joint_pos/_vel are updated only by the UART reader.
+            # _gimbal_joint_pos/_vel are updated only by the servo reader.
             self._gimbal_target_cmd_deg = np.array(
                 [head_yaw_servo_deg, head_pitch_servo_deg],
                 dtype=np.float32,
@@ -476,8 +511,14 @@ class UnitreeNode(RealNode):
             self.gimbal.stop_all()
 
     def destroy_node(self):
-        self._stop_gimbal_writer()
-        self._stop_gimbal_reader()
+        if not self.dryrun and hasattr(self, "low_cmd_buffer") and hasattr(self, "low_cmd_publisher"):
+            try:
+                self._turn_off_motors()
+            except Exception as exc:
+                self.get_logger().error(f"Failed to send final motor-disable command: {exc}")
+        else:
+            self._stop_gimbal_writer()
+            self._stop_gimbal_reader()
         if self.gimbal is not None and not self.dryrun:
             self.gimbal.disconnect()
         super().destroy_node()

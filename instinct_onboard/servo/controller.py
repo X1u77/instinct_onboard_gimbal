@@ -251,8 +251,8 @@ class ServoController:
                 p = power_mw if power_mw is not None else config.default_power_mw
 
                 # Compute travel time from the previous target, not from zero.
-                # Recomputing from zero makes a head held near 50 degrees receive
-                # a ~250 ms trajectory for every tiny 50 Hz correction.
+                # Recomputing from zero gives every small 50 Hz correction an
+                # unnecessarily long trajectory on a non-zero head target.
                 previous_protocol_angle = self._target_protocol_angle_cache.get(servo_id, 0)
                 distance_deg = abs(protocol_angle - previous_protocol_angle) / 10.0
                 time_ms = int(distance_deg / speed_deg_s * 1000)

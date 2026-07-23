@@ -482,16 +482,12 @@ from geometry_msgs.msg import TransformStamped
 from sensor_msgs.msg import CameraInfo, Image, PointCloud2, PointField
 from tf2_ros import StaticTransformBroadcaster
 
-from instinct_onboard import robot_cfgs
 from instinct_onboard.agents.base import OnboardAgent
 from instinct_onboard.ros_nodes.base import RealNode
 from instinct_onboard.utils import CircularBuffer
 
 
 class ParkourAgent(OnboardAgent):
-    rs_resolution = (480, 270)
-    rs_frequency = 60
-
     def __init__(
         self,
         logdir: str,
@@ -521,8 +517,11 @@ class ParkourAgent(OnboardAgent):
         self.cmd_ny_range = [0.0, 0.0]
         self.cmd_pyaw_range = ang_vel_range
         self.cmd_nyaw_range = ang_vel_range
+        self.rs_resolution = tuple(self.ros_node.rs_resolution)
+        self.rs_frequency = int(self.ros_node.rs_fps)
         self._parse_obs_config()
         self._parse_action_config()
+        self._validate_robot_model_pair()
         self._load_models()
         self.depth_vis = depth_vis
         if self.depth_vis:
@@ -553,6 +552,44 @@ class ParkourAgent(OnboardAgent):
         print(table)
         self._parse_depth_image_config()
 
+    def _get_observation_joint_ids(self, obs_name: str) -> np.ndarray:
+        """Resolve an Isaac Lab observation's SceneEntityCfg joint selection.
+
+        The revised D455 task explicitly selects the 29 body joints for both
+        ``joint_pos`` and ``joint_vel``.  The legacy task selected all 31
+        joints for position.  Reading the exported env.yaml keeps deployment
+        compatible with both models and, crucially, preserves training order.
+        """
+        obs_cfg = self.cfg["observations"]["policy"][obs_name]
+        asset_cfg = obs_cfg.get("params", {}).get("asset_cfg", {})
+        joint_patterns = asset_cfg.get("joint_names") if isinstance(asset_cfg, dict) else None
+        if not joint_patterns:
+            return np.arange(self.ros_node.NUM_JOINTS, dtype=np.int64)
+
+        preserve_order = bool(asset_cfg.get("preserve_order", False))
+        if preserve_order:
+            resolved = []
+            for pattern in joint_patterns:
+                matches = [
+                    idx
+                    for idx, joint_name in enumerate(self.ros_node.sim_joint_names)
+                    if re.fullmatch(pattern, joint_name)
+                ]
+                if not matches:
+                    raise ValueError(
+                        f"Observation '{obs_name}' joint pattern {pattern!r} did not match the onboard robot."
+                    )
+                resolved.extend(matches)
+        else:
+            resolved = [
+                idx
+                for idx, joint_name in enumerate(self.ros_node.sim_joint_names)
+                if any(re.fullmatch(pattern, joint_name) for pattern in joint_patterns)
+            ]
+        if len(resolved) != len(set(resolved)):
+            raise ValueError(f"Observation '{obs_name}' resolves duplicate joints: {resolved}")
+        return np.asarray(resolved, dtype=np.int64)
+
     def _parse_action_config(self):
         super()._parse_action_config()
         self._camera_action_joint_ids = None
@@ -582,6 +619,31 @@ class ParkourAgent(OnboardAgent):
                     for _, joint_name_expr in enumerate(action_config["default_joint_names"]):
                         if re.search(joint_name_expr, name):
                             self._zero_action_joints[i] = 1.0
+
+    def _validate_robot_model_pair(self):
+        """Fail before motor startup when a legacy model is paired with the D455 head."""
+        # Body29DepthOn31Agent deliberately loads a legacy 29-DoF stand model
+        # on the 31-DoF node, so only validate native 31-DoF policies here.
+        if self.ros_node.robot_class_name != "G1_31Dof_D455" or getattr(self, "BODY_DOF", None) == 29:
+            return
+
+        joint_pos_count = len(self._get_observation_joint_ids("joint_pos"))
+        joint_vel_count = len(self._get_observation_joint_ids("joint_vel"))
+        camera_prim_path = str(self.cfg["scene"]["camera"].get("prim_path", ""))
+        errors = []
+        if joint_pos_count != 29 or joint_vel_count != 29:
+            errors.append(
+                f"expected 29 body joint_pos/joint_vel values, got {joint_pos_count}/{joint_vel_count}"
+            )
+        if "d455_link" not in camera_prim_path:
+            errors.append(f"camera prim_path does not reference d455_link: {camera_prim_path!r}")
+        if not np.allclose(self.depth_range, (0.4, 2.5), atol=1e-4):
+            errors.append(f"expected D455 depth range (0.4, 2.5), got {tuple(self.depth_range)}")
+        if errors:
+            raise ValueError(
+                "The parkour artifacts do not match the revised G1 D455 training configuration: "
+                + "; ".join(errors)
+            )
 
     def _get_gimbal_action_limits(self):
         if not hasattr(self.ros_node, "gimbal_pan_range") or not hasattr(self.ros_node, "gimbal_tilt_range"):
@@ -650,15 +712,6 @@ class ParkourAgent(OnboardAgent):
             if hasattr(self, "crop_region")
             else self.output_resolution[1]
         )
-        # For sample resize
-        square_size = int(self.rs_resolution[0] // self.output_resolution[0])
-        rows, cols = self.rs_resolution[1], self.rs_resolution[0]
-        center_y_coords = np.arange(self.output_resolution[1]) * square_size + square_size // 2
-        center_x_coords = np.arange(self.output_resolution[0]) * square_size + square_size // 2
-        y_grid, x_grid = np.meshgrid(center_y_coords, center_x_coords, indexing="ij")
-        valid_mask = (y_grid < rows) & (x_grid < cols)
-        self.y_valid = np.clip(y_grid, 0, rows - 1)
-        self.x_valid = np.clip(x_grid, 0, cols - 1)
         # For downsample history
         if "history_skip_frames" in self.cfg["observations"]["policy"]["depth_image"]["params"]:
             downsample_factor = self.cfg["observations"]["policy"]["depth_image"]["params"]["history_skip_frames"]
@@ -675,10 +728,11 @@ class ParkourAgent(OnboardAgent):
                 + 1
             )
         sim_frequency = int(1 / self.cfg["scene"]["camera"]["update_period"])
-        real_downsample_factor = int(self.rs_frequency / sim_frequency * downsample_factor)
+        real_downsample_factor = max(1, round(self.rs_frequency / sim_frequency * downsample_factor))
         self.depth_obs_indices = np.linspace(-1 - real_downsample_factor * (frames - 1), -1, frames).astype(int)
         print(f"Depth observation downsample indices: {self.depth_obs_indices}")
-        self.depth_image_buffer = CircularBuffer(length=self.rs_frequency)
+        required_history = int(abs(self.depth_obs_indices[0]))
+        self.depth_image_buffer = CircularBuffer(length=max(self.rs_frequency, required_history))
 
     def _parse_observation_function(self, obs_name, obs_config):
         obs_func = obs_config["func"].split(":")[-1]  # get the function name from the config
@@ -700,6 +754,28 @@ class ParkourAgent(OnboardAgent):
         self.ort_sessions["depth_encoder"] = ort.InferenceSession(depth_encoder_path, providers=ort_execution_providers)
         actor_path = self._resolve_logdir_path("exported", "actor.onnx")
         self.ort_sessions["actor"] = ort.InferenceSession(actor_path, providers=ort_execution_providers)
+        depth_input_shape = self.ort_sessions["depth_encoder"].get_inputs()[0].shape
+        if (
+            len(depth_input_shape) >= 4
+            and isinstance(depth_input_shape[-2], int)
+            and isinstance(depth_input_shape[-1], int)
+            and tuple(depth_input_shape[-2:]) != (self.depth_height, self.depth_width)
+        ):
+            raise ValueError(
+                f"Depth encoder expects image {tuple(depth_input_shape[-2:])}, but env.yaml builds "
+                f"{(self.depth_height, self.depth_width)}."
+            )
+        actor_output_shape = self.ort_sessions["actor"].get_outputs()[0].shape
+        expected_actions = int(getattr(self, "BODY_DOF", self.ros_node.NUM_ACTIONS))
+        if (
+            actor_output_shape
+            and isinstance(actor_output_shape[-1], int)
+            and actor_output_shape[-1] != expected_actions
+        ):
+            raise ValueError(
+                f"Actor ONNX outputs {actor_output_shape[-1]} actions, but "
+                f"{self.__class__.__name__} requires {expected_actions}."
+            )
         print(f"Loaded ONNX models from {self.logdir}")
 
     def reset(self):
@@ -742,8 +818,9 @@ class ParkourAgent(OnboardAgent):
             self.debug_depth_publisher.publish(depth_image_msg)
         if self.debug_pointcloud_publisher is not None:
             pointcloud_msg = self.ros_node.depth_image_to_pointcloud_msg(
-                depth_obs[0, -1].reshape(self.depth_height, self.depth_width) * self.depth_range[1]
-                + self.depth_range[0]
+                self._depth_output_to_meters(
+                    depth_obs[0, -1].reshape(self.depth_height, self.depth_width)
+                )
             )
             self.debug_pointcloud_publisher.publish(pointcloud_msg)
 
@@ -753,15 +830,35 @@ class ParkourAgent(OnboardAgent):
         # run actor MLP
         actor_input = np.concatenate([proprio_obs, depth_image_output], axis=1)
         actor_input_name = self.ort_sessions["actor"].get_inputs()[0].name
+        actor_input_shape = self.ort_sessions["actor"].get_inputs()[0].shape
+        expected_actor_dim = actor_input_shape[-1] if actor_input_shape else None
+        if isinstance(expected_actor_dim, int) and actor_input.shape[-1] != expected_actor_dim:
+            term_shapes = {
+                name: tuple(self.obs_history_buffers[name].buffer.shape)
+                if name in self.obs_history_buffers
+                else tuple(np.asarray(self.obs_funcs[name]()).shape)
+                for name in self.proprio_obs_names
+            }
+            raise ValueError(
+                "Actor input dimension mismatch: "
+                f"deployment built {actor_input.shape[-1]}, ONNX expects {expected_actor_dim}; "
+                f"proprio terms={term_shapes}, depth embedding={tuple(depth_image_output.shape)}. "
+                "Check that env.yaml and exported ONNX files come from the same G1Comp run."
+            )
         action = self.ort_sessions["actor"].run(None, {actor_input_name: actor_input})[0]
         action = action.reshape(-1)
         # reconstruct full action including zeroed joints
         mask = (self._zero_action_joints == 0).astype(bool)
+        if action.size != int(mask.sum()):
+            raise ValueError(
+                f"Actor returned {action.size} actions, but the deployment configuration expects "
+                f"{int(mask.sum())}. Check the robot profile and env.yaml."
+            )
         full_action = np.zeros(self.ros_node.NUM_ACTIONS, dtype=np.float32)
         full_action[mask] = action
         if self.freeze_head and self._camera_action_joint_ids is not None:
             # With use_default_offset=True, zero raw camera action commands the
-            # training default pose (yaw=0, pitch=50 degrees).
+            # default camera pose exported by the training configuration.
             full_action[self._camera_action_joint_ids] = 0.0
         full_action = self._clip_camera_yaw_pitch_action(full_action)
         self._debug_policy_io(full_action)
@@ -818,17 +915,13 @@ class ParkourAgent(OnboardAgent):
         return self.xyyaw_command
 
     def _get_joint_vel_rel_obs(self):
-        """Return shape: (num_non_head_joints,) = (29,)
-        Simulation's joint_vel uses NON_HEAD_JOINT_REGEX which excludes head_yaw_joint
-        and head_pitch_joint. The policy was trained with 29-dim velocity observations.
-        We return only the non-head joint velocities to match the training setup.
-        """
-        non_head_joint_ids = [
-            i
-            for i, joint_name in enumerate(self.ros_node.sim_joint_names)
-            if joint_name not in ("head_yaw_joint", "head_pitch_joint")
-        ]
-        return self.ros_node.joint_vel_[non_head_joint_ids]  # shape (29,)
+        joint_ids = self._get_observation_joint_ids("joint_vel")
+        return self.ros_node.joint_vel_[joint_ids] - self.default_joint_vel[joint_ids]
+
+    def _get_joint_pos_rel_obs(self):
+        """Match the exact joint selection/order exported in env.yaml."""
+        joint_ids = self._get_observation_joint_ids("joint_pos")
+        return self.ros_node.joint_pos_[joint_ids] - self.default_joint_pos[joint_ids]
 
     def _get_camera_offset_yaw_pitch_obs(self):
         """Return camera yaw/pitch in simulation coordinates, matching mdp.camera_offset_yaw_pitch."""
@@ -854,8 +947,22 @@ class ParkourAgent(OnboardAgent):
             x1, x2, y1, y2 = self.crop_region
             depth_image = depth_image[x1 : shape[0] - x2, y1 : shape[1] - y2]
 
-        mask = (depth_image < 0.2).astype(np.uint8)
-        depth_image = cv2.inpaint(depth_image, mask, 3, cv2.INPAINT_NS)
+        # RealSense uses zero/non-finite depth for invalid stereo pixels.  Do
+        # not inpaint merely because a valid point is close to the camera.
+        invalid_mask = (~np.isfinite(depth_image)) | (depth_image <= 0.0)
+        if invalid_mask.any() and (~invalid_mask).any():
+            depth_image = depth_image.copy()
+            depth_image[invalid_mask] = 0.0
+            depth_image = cv2.inpaint(
+                depth_image.astype(np.float32),
+                invalid_mask.astype(np.uint8),
+                3,
+                cv2.INPAINT_NS,
+            )
+        elif invalid_mask.all():
+            # A dead/empty frame should look maximally far, not like a near
+            # obstacle.  This is also safer for the D455 startup transient.
+            depth_image = np.full_like(depth_image, self.depth_range[1], dtype=np.float32)
 
         if hasattr(self, "blind_spot_crop"):
             shape = depth_image.shape
@@ -874,6 +981,16 @@ class ParkourAgent(OnboardAgent):
 
         output_norm = filt_norm * (self.depth_output_range[1] - self.depth_output_range[0]) + self.depth_output_range[0]
         self.depth_image_buffer.append(output_norm)
+
+    def _depth_output_to_meters(self, depth_image: np.ndarray) -> np.ndarray:
+        """Invert the training depth normalization for visualization."""
+        output_low, output_high = self.depth_output_range
+        if abs(output_high - output_low) < 1e-8:
+            return np.full_like(depth_image, self.depth_range[0], dtype=np.float32)
+        normalized = (depth_image - output_low) / (output_high - output_low)
+        return (
+            normalized * (self.depth_range[1] - self.depth_range[0]) + self.depth_range[0]
+        ).astype(np.float32)
 
     def _get_delayed_visualizable_image_obs(self):
         return self._get_depth_image_downsample_obs()
@@ -906,7 +1023,7 @@ class ParkourStandAgent(ParkourAgent):
 
 
 class Body29DepthOn31Agent(ParkourStandAgent):
-    """Run the original 29-DoF stand path on a 31-DoF onboard node."""
+    """Run the original 29-DoF stand policy while holding both head joints at zero."""
 
     BODY_DOF = 29
 
@@ -924,7 +1041,7 @@ class Body29DepthOn31Agent(ParkourStandAgent):
         super().__init__(logdir=logdir, ros_node=ros_node)
         self._body_joint_ids = np.arange(self.BODY_DOF, dtype=np.int64)
         self._head_joint_ids = np.arange(self.BODY_DOF, self.ros_node.NUM_ACTIONS, dtype=np.int64)
-        self._apply_head_defaults()
+        self._hold_head_at_zero()
 
     def _parse_action_config(self):
         self.default_joint_pos = np.zeros(self.ros_node.NUM_JOINTS, dtype=np.float32)
@@ -979,12 +1096,11 @@ class Body29DepthOn31Agent(ParkourStandAgent):
                 break
         self._zero_action_joints = np.zeros(self.BODY_DOF, dtype=np.float32)
 
-    def _apply_head_defaults(self):
+    def _hold_head_at_zero(self):
         if self.ros_node.NUM_ACTIONS <= self.BODY_DOF:
             return
-        head_default = robot_cfgs.G1_31Dof_TorsoBase.head_default_joint_pos
-        self.default_joint_pos[self._head_joint_ids] = head_default[: len(self._head_joint_ids)]
-        self._action_offset[self._head_joint_ids] = head_default[: len(self._head_joint_ids)]
+        self.default_joint_pos[self._head_joint_ids] = 0.0
+        self._action_offset[self._head_joint_ids] = 0.0
         self._action_scale[self._head_joint_ids] = 0.0
 
     def _get_base_velocity_obs(self):
@@ -1026,8 +1142,20 @@ class Body29DepthOn31Agent(ParkourStandAgent):
         )[0]
         actor_input = np.concatenate([proprio_obs, depth_image_output], axis=1)
         actor_input_name = self.ort_sessions["actor"].get_inputs()[0].name
+        actor_input_shape = self.ort_sessions["actor"].get_inputs()[0].shape
+        expected_actor_dim = actor_input_shape[-1] if actor_input_shape else None
+        if isinstance(expected_actor_dim, int) and actor_input.shape[-1] != expected_actor_dim:
+            raise ValueError(
+                f"29-DoF stand actor input mismatch: deployment built {actor_input.shape[-1]}, "
+                f"ONNX expects {expected_actor_dim}. Check that env.yaml, agent.yaml and ONNX "
+                "files come from the same stand run."
+            )
         body_action = self.ort_sessions["actor"].run(None, {actor_input_name: actor_input})[0].reshape(-1)
+        if body_action.size != self.BODY_DOF:
+            raise ValueError(
+                f"29-DoF stand actor returned {body_action.size} actions; expected {self.BODY_DOF}."
+            )
 
         full_action = np.zeros(self.ros_node.NUM_ACTIONS, dtype=np.float32)
-        full_action[self._body_joint_ids] = body_action[: self.BODY_DOF]
+        full_action[self._body_joint_ids] = body_action
         return full_action, False

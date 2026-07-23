@@ -6,7 +6,6 @@ import re
 import numpy as np
 import onnxruntime as ort
 
-from instinct_onboard import robot_cfgs
 from instinct_onboard.agents.base import OnboardAgent
 from instinct_onboard.normalizer import Normalizer
 from instinct_onboard.ros_nodes.base import RealNode
@@ -58,6 +57,14 @@ class WalkAgent(OnboardAgent):
         else:
             normalized_obs = obs.astype(np.float32)[None, :]
         actor_input_name = self.ort_sessions["actor"].get_inputs()[0].name
+        actor_input_shape = self.ort_sessions["actor"].get_inputs()[0].shape
+        expected_actor_dim = actor_input_shape[-1] if actor_input_shape else None
+        if isinstance(expected_actor_dim, int) and normalized_obs.shape[-1] != expected_actor_dim:
+            raise ValueError(
+                f"Actor input dimension mismatch: deployment built {normalized_obs.shape[-1]}, "
+                f"ONNX expects {expected_actor_dim}. Check that env.yaml and actor.onnx "
+                "come from the same 29-DoF walk run."
+            )
         action = self.ort_sessions["actor"].run(None, {actor_input_name: normalized_obs})[0]
         action = action.reshape(-1)
         done = False  # Continuous walking, no termination
@@ -83,8 +90,8 @@ class Body29ActorOn31Agent(WalkAgent):
     """Run a 29-DoF actor-only policy on a 31-DoF onboard node.
 
     The first 29 joints are shared between the 29-DoF and 31-DoF robot definitions.
-    Head joints are held at the 31-DoF default pose and excluded from the policy
-    observation/action interface.
+    Head joints are excluded from the policy observation/action interface and
+    held at zero radians by the deployment layer.
     """
 
     BODY_DOF = 29
@@ -93,7 +100,19 @@ class Body29ActorOn31Agent(WalkAgent):
         super().__init__(*args, **kwargs)
         self._body_joint_ids = np.arange(self.BODY_DOF, dtype=np.int64)
         self._head_joint_ids = np.arange(self.BODY_DOF, self.ros_node.NUM_ACTIONS, dtype=np.int64)
-        self._apply_head_defaults()
+        self._hold_head_at_zero()
+
+    def _load_models(self):
+        super()._load_models()
+        actor_output_shape = self.ort_sessions["actor"].get_outputs()[0].shape
+        if (
+            actor_output_shape
+            and isinstance(actor_output_shape[-1], int)
+            and actor_output_shape[-1] != self.BODY_DOF
+        ):
+            raise ValueError(
+                f"29-DoF walk wrapper requires 29 actor outputs, got {actor_output_shape[-1]}."
+            )
 
     def _parse_action_config(self):
         """Parse 29-DoF action config while leaving 31-DoF head joints fixed."""
@@ -148,12 +167,11 @@ class Body29ActorOn31Agent(WalkAgent):
                     self._action_offset[i] = self._get_config_value_for_joint(offset, name, joint_name_expr)
                 break
 
-    def _apply_head_defaults(self):
+    def _hold_head_at_zero(self):
         if self.ros_node.NUM_ACTIONS <= self.BODY_DOF:
             return
-        head_default = robot_cfgs.G1_31Dof_TorsoBase.head_default_joint_pos
-        self.default_joint_pos[self._head_joint_ids] = head_default[: len(self._head_joint_ids)]
-        self._action_offset[self._head_joint_ids] = head_default[: len(self._head_joint_ids)]
+        self.default_joint_pos[self._head_joint_ids] = 0.0
+        self._action_offset[self._head_joint_ids] = 0.0
         self._action_scale[self._head_joint_ids] = 0.0
 
     def _get_joint_pos_obs(self):
@@ -171,10 +189,20 @@ class Body29ActorOn31Agent(WalkAgent):
     def _get_last_action_obs(self):
         return np.asarray(self.ros_node.action, dtype=np.float32)[self._body_joint_ids]
 
+    def reset(self):
+        # Raw actions produced by another policy use a different observation
+        # history and must not seed this policy's last_action term.
+        self.ros_node.action[self._body_joint_ids] = 0.0
+        super().reset()
+
     def step(self):
         body_action, done = super().step()
         if self.ros_node.NUM_ACTIONS <= self.BODY_DOF:
             return body_action, done
+        if body_action.size != self.BODY_DOF:
+            raise ValueError(
+                f"29-DoF walk actor returned {body_action.size} actions; expected {self.BODY_DOF}."
+            )
         full_action = np.zeros(self.ros_node.NUM_ACTIONS, dtype=np.float32)
-        full_action[self._body_joint_ids] = body_action[: self.BODY_DOF]
+        full_action[self._body_joint_ids] = body_action
         return full_action, done

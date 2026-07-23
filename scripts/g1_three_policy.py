@@ -10,7 +10,6 @@ import inspect
 import numpy as np
 import rclpy
 from sensor_msgs.msg import JointState
-from tf2_ros import TransformBroadcaster
 
 from instinct_onboard.agents.base import ColdStartAgent
 from instinct_onboard.agents.parkour_agent import Body29DepthOn31Agent, ParkourAgent
@@ -18,7 +17,6 @@ from instinct_onboard.agents.walk_agent import Body29ActorOn31Agent
 from instinct_onboard.ros_nodes.realsense import UnitreeRsCameraNode
 
 MAIN_LOOP_FREQUENCY_CHECK_INTERVAL = 500
-DEFAULT_CAMERA_SERIAL = "420122071680"
 
 
 class G1ThreePolicyNode(UnitreeRsCameraNode):
@@ -37,7 +35,6 @@ class G1ThreePolicyNode(UnitreeRsCameraNode):
     def start_ros_handlers(self):
         super().start_ros_handlers()
         self.joint_state_publisher = self.create_publisher(JointState, "joint_states", 10)
-        self.tf_broadcaster = TransformBroadcaster(self)
         main_loop_duration = 0.02
         self.get_logger().info(f"Starting main loop with duration: {main_loop_duration} seconds.")
         self.main_loop_timer = self.create_timer(main_loop_duration, self.main_loop_callback)
@@ -47,6 +44,8 @@ class G1ThreePolicyNode(UnitreeRsCameraNode):
             self.main_loop_callback_time_consumptions = queue.Queue(maxsize=MAIN_LOOP_FREQUENCY_CHECK_INTERVAL)
 
     def _switch_to(self, agent_name: str, reason: str):
+        if self.current_agent_name == agent_name:
+            return
         self.get_logger().info(reason)
         self.current_agent_name = agent_name
         self.available_agents[self.current_agent_name].reset()
@@ -69,8 +68,16 @@ class G1ThreePolicyNode(UnitreeRsCameraNode):
             self.get_logger().info(reason)
 
     def _step_current_agent(self):
+        if not self.dryrun and not self.gimbal_feedback_is_fresh():
+            self.get_logger().error("Gimbal feedback is missing or stale; shutting down motor commands.")
+            self._turn_off_motors()
+            raise SystemExit()
         agent = self.available_agents[self.current_agent_name]
         action, done = agent.step()
+        if self.current_agent_name == "parkour" and not self.dryrun and not self.rs_data_is_fresh():
+            self.get_logger().error("D455 depth frames are missing or stale; shutting down motor commands.")
+            self._turn_off_motors()
+            raise SystemExit()
         if self.current_agent_name == "parkour" and self._transition_start_time is not None:
             elapsed = time.monotonic() - self._transition_start_time
             alpha = float(np.clip(elapsed / self.parkour_blend_duration, 0.0, 1.0))
@@ -148,6 +155,8 @@ class G1ThreePolicyNode(UnitreeRsCameraNode):
             elif self.joy_stick_data.A:
                 self._switch_to("walk", "A button pressed, switching to 29dof walk.")
 
+        self._publish_joint_states()
+
         if MAIN_LOOP_FREQUENCY_CHECK_INTERVAL > 1:
             self.main_loop_callback_time_consumptions.put(time.time() - start_time)
             self.main_loop_timer_counter += 1
@@ -161,30 +170,44 @@ class G1ThreePolicyNode(UnitreeRsCameraNode):
                 self.main_loop_timer_counter = 0
                 self.main_loop_timer_counter_time = time.time()
 
+    def _publish_joint_states(self):
+        """Publish body and measured revised-head joints for robot_state_publisher/RViz."""
+        msg = JointState()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.name = list(self.sim_joint_names)
+        msg.position = self.joint_pos_.astype(float).tolist()
+        msg.velocity = self.joint_vel_.astype(float).tolist()
+        self.joint_state_publisher.publish(msg)
+
 
 def main(args):
     rclpy.init()
 
     node = G1ThreePolicyNode(
-        rs_resolution=(480, 270),
-        rs_fps=60,
-        rs_serial_number=DEFAULT_CAMERA_SERIAL,
+        rs_resolution=(args.camera_width, args.camera_height),
+        rs_fps=args.camera_fps,
+        rs_vfov_deg=57.0,
+        rs_serial_number=args.camera_serial,
         camera_individual_process=True,
         joint_pos_protect_ratio=2.0,
-        robot_class_name="G1_31Dof_TorsoBase",
+        robot_class_name="G1_31Dof_D455",
         dryrun=not args.nodryrun,
         enable_gimbal=args.gimbal,
-        gimbal_serial_port=args.gimbal_port,
-        gimbal_pan_range=tuple(np.rad2deg([-1.6, 1.6])),
-        gimbal_tilt_range=tuple(np.rad2deg([0.5, 1.5])),
+        gimbal_backend="g1_comp_service",
+        gimbal_pan_range=(-50.0, 50.0),
+        gimbal_tilt_range=(-20.0, 85.0),
     )
+    if args.nodryrun and node.gimbal is None:
+        node.destroy_node()
+        rclpy.shutdown()
+        raise RuntimeError("Gimbal connection failed; refusing to start the 31-DoF deployment.")
 
     parkour_kwargs = dict(
-    logdir=args.logdir,
-    ros_node=node,
-    depth_vis=args.depth_vis,
-    pointcloud_vis=args.pointcloud_vis,
-)
+        logdir=args.logdir,
+        ros_node=node,
+        depth_vis=args.depth_vis,
+        pointcloud_vis=args.pointcloud_vis,
+    )
 
     parkour_signature = inspect.signature(ParkourAgent)
     if "initial_speed_scale" in parkour_signature.parameters:
@@ -242,9 +265,18 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="G1 deployment node with 29dof stand, 29dof walk and 31dof parkour")
-    parser.add_argument("--stand_logdir", type=str, help="Directory to load the 29dof stand agent from")
-    parser.add_argument("--walk_logdir", type=str, help="Directory to load the 29dof walk agent from")
-    parser.add_argument("--logdir", type=str, help="Directory to load the 31dof parkour agent from")
+    parser.add_argument("--stand_logdir", type=str, required=True, help="Directory for the 29dof stand agent")
+    parser.add_argument("--walk_logdir", type=str, required=True, help="Directory for the 29dof walk agent")
+    parser.add_argument("--logdir", type=str, required=True, help="Directory for the revised-head 31dof parkour agent")
+    parser.add_argument(
+        "--camera_serial",
+        type=str,
+        default=None,
+        help="D455 serial number. If omitted, use the first connected RealSense.",
+    )
+    parser.add_argument("--camera_width", type=int, default=848, help="D455 depth width (default: 848)")
+    parser.add_argument("--camera_height", type=int, default=480, help="D455 depth height (default: 480)")
+    parser.add_argument("--camera_fps", type=int, default=60, help="D455 depth FPS (default: 60)")
     parser.add_argument(
         "--parkour_freeze_head",
         action="store_true",
@@ -294,12 +326,6 @@ if __name__ == "__main__":
         help="Enable gimbal control for head joints (default: False)",
     )
     parser.add_argument(
-        "--gimbal_port",
-        type=str,
-        default="/dev/ttyUSB0",
-        help="Serial port for gimbal servo (default: /dev/ttyUSB0)",
-    )
-    parser.add_argument(
         "--debug",
         action="store_true",
         default=False,
@@ -313,6 +339,11 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
+    if args.nodryrun and not args.gimbal:
+        parser.error(
+            "--nodryrun requires --gimbal because the 31dof parkour policy controls head pitch "
+            "and consumes measured head feedback."
+        )
     if args.debug:
         import debugpy
 

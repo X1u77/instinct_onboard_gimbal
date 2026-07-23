@@ -187,9 +187,17 @@ class RealNode(Node):
         so that the PD controller runs in robot but not our script.
         """
         p_limits_low = (-self.torque_limits) + d_gains * self.joint_vel_
-        p_limits_high = (self.torque_limits) + d_gains * self.joint_vel_
-        action_low = (p_limits_low / p_gains) + self.joint_pos_
-        action_high = (p_limits_high / p_gains) + self.joint_pos_
+        p_limits_high = self.torque_limits + d_gains * self.joint_vel_
+        # Some policies intentionally leave joints uncontrolled (kp == 0).
+        # Dividing those entries produced inf/NaN warnings and could poison the
+        # command vector.  An uncontrolled joint should not be torque-clipped.
+        action_low = np.full_like(self.joint_pos_, -np.inf, dtype=np.float32)
+        action_high = np.full_like(self.joint_pos_, np.inf, dtype=np.float32)
+        controlled = np.abs(p_gains) > 1e-8
+        np.divide(p_limits_low, p_gains, out=action_low, where=controlled)
+        np.divide(p_limits_high, p_gains, out=action_high, where=controlled)
+        action_low[controlled] += self.joint_pos_[controlled]
+        action_high[controlled] += self.joint_pos_[controlled]
 
         return np.clip(target_joint_pos, action_low, action_high)
 

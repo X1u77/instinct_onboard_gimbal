@@ -1,5 +1,8 @@
 # Instinct Onboard - Unitree G1 真机部署指南
 
+G1-Comp首次上真机请先完整执行
+[G1_COMP_REAL_ROBOT_DEPLOYMENT_SOP.md](G1_COMP_REAL_ROBOT_DEPLOYMENT_SOP.md)。
+
 ## 目录
 
 - [概述](#概述)
@@ -52,16 +55,17 @@ ROS2 (Humble)
 
 ### 相机
 
-- **Intel RealSense D435**（推荐）或 D435i
+- Three-policy新头部部署使用 **Intel RealSense D455**
 - 通过 USB 3.0 连接到机器人主板或主机
-- 建议分辨率：480 x 270 @ 60 FPS
+- Three-policy默认深度流：848 x 480 @ 60 FPS
 - 确保 IR 投射器正常工作
 
-### 头部云台（可选）
+### G1-Comp头部
 
-- 双轴 UART 舵机云台（支持 FS90R 或类似舵机）
-- 通过 RS-485 转 UART 或直连 USB-UART 板
-- 默认串口：`/dev/ttyUSB0`，波特率 115200
+- 双轴DYNAMIXEL头部，Protocol 2.0
+- 必须先运行官方 `g1_comp_servo_service/test_calibration`
+- 官方server独占串口并通过DDS向three-policy提供控制和反馈
+- 默认串口：`/dev/ttyUSB0`，官方server使用1 Mbps
 
 ### 工控机要求
 
@@ -431,7 +435,7 @@ Stand
 | `--pointcloud_vis` | flag | False | 发布点云话题 `/debug/pointcloud` |
 | `--motion_vis` | flag | False | 发布动作序列关节状态（用于 RViz 可视化） |
 
-### 云台参数
+### 云台参数（旧 `g1_parkour.py` 入口）
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
@@ -439,6 +443,9 @@ Stand
 | `--gimbal_port` | string | `/dev/ttyUSB0` | 云台串口设备路径 |
 | `--gimbal_pan_range` | float | `[-90, 90]` | 云台水平角度范围（度） |
 | `--gimbal_tilt_range` | float | `[-45, 45]` | 云台俯仰角度范围（度） |
+
+当前 `g1_three_policy.py` 使用官方G1-Comp DDS server，不接受串口、波特率、
+ID或手工range参数。串口和标定文件在启动server时指定。
 
 ### 速度控制参数
 
@@ -626,11 +633,10 @@ The motors and this process shuts down.
 ls -la /dev/ttyUSB0
 sudo chmod 666 /dev/ttyUSB0
 
-# 测试舵机
-python instinct_onboard/test_servo.py --port /dev/ttyUSB0 --sweep
-
-# 检查波特率（应为 115200）
-stty -F /dev/ttyUSB0 speed
+# 使用官方程序读取G1-Comp标定后的关节角
+g1_comp_servo_service/build/test_read_angle \
+  --serial /dev/ttyUSB0 \
+  --config g1_comp_servo_service/config/config.yaml
 ```
 
 ### Q7: `onnxruntime` GPU 推理报错
@@ -661,24 +667,31 @@ ros2 topic hz /lowstate
 
 ## 附录：完整命令示例
 
-### 跑酷模式（真机 + 云台 + 可视化）
+### Three-policy模式（29-DoF站立/行走 + 31-DoF跑酷）
+
+终端1：
+
+```bash
+source /opt/ros/humble/setup.bash
+export ROS_DOMAIN_ID=42
+g1_comp_servo_service/build/main \
+    --network eth0 \
+    --domain "$ROS_DOMAIN_ID" \
+    --serial /dev/ttyUSB0 \
+    --config g1_comp_servo_service/config/config.yaml
+```
+
+终端2：
 
 ```bash
 source /opt/ros/humble/setup.bash
 export ROS_DOMAIN_ID=42
 export CUDA_VISIBLE_DEVICES=0
-
-python scripts/g1_parkour.py \
-    --logdir /models/parkour_g1 \
-    --standdir /models/stand_g1 \
+python scripts/g1_three_policy.py \
+    --stand_logdir /models/stand_g1_29dof \
+    --walk_logdir /models/walk_g1_29dof \
+    --logdir /models/parkour_g1_comp_31dof \
     --gimbal \
-    --gimbal_port /dev/ttyUSB0 \
-    --gimbal_pan_range -90 90 \
-    --gimbal_tilt_range -45 45 \
-    --lin_vel_deadband 0.5 \
-    --lin_vel_range 0.5 0.5 \
-    --ang_vel_deadband 0.15 \
-    --ang_vel_range 0.0 1.0 \
     --startup_step_size 0.2 \
     --kpkd_factor 2.0 \
     --depth_vis \
