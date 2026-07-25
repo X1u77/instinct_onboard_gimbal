@@ -114,7 +114,19 @@ class G1ThreePolicyNode(UnitreeRsCameraNode):
             return
 
         if self.current_agent_name == "cold_start":
-            done = self._step_current_agent()
+            # Dry-run actions are published to an isolated topic and never
+            # reach the robot.  A physical ColdStart therefore cannot
+            # converge in dry-run when the robot is not already at the
+            # policy's default pose.  Skip only that physical transition so
+            # dry-run can still exercise model inference and mode switching.
+            if self.dryrun:
+                self.get_logger().info(
+                    "Dry-run: skipping physical ColdStart; no actuator targets are applied.",
+                    once=True,
+                )
+                done = True
+            else:
+                done = self._step_current_agent()
             if done:
                 self.get_logger().info(
                     "ColdStartAgent done. Press 'R1' for 29dof stand, 'A' for 29dof walk, 'L1' for 31dof parkour.",
@@ -238,6 +250,7 @@ def main(args):
     cold_start_agent = ColdStartAgent(
         startup_step_size=args.startup_step_size,
         ros_node=node,
+        completion_tolerance=args.coldstart_tolerance,
         joint_target_pos=stand_agent.default_joint_pos,
         action_scale=stand_agent.action_scale,
         action_offset=stand_agent.action_offset,
@@ -294,6 +307,15 @@ if __name__ == "__main__":
         type=float,
         default=0.2,
         help="Startup step size for the cold start agent (default: 0.2)",
+    )
+    parser.add_argument(
+        "--coldstart_tolerance",
+        type=float,
+        default=None,
+        help=(
+            "Maximum measured joint error (rad) accepted before ColdStart finishes. "
+            "Defaults to --startup_step_size when omitted."
+        ),
     )
     parser.add_argument(
         "--kpkd_factor",

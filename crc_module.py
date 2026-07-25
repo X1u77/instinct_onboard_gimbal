@@ -4,6 +4,8 @@ This mirrors the Unitree SDK2 Python HG LowCmd packing and CRC32 algorithm
 while accepting ROS message objects from ``unitree_hg.msg``.
 """
 
+from __future__ import annotations
+
 import struct
 from typing import Any
 

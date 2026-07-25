@@ -1,7 +1,8 @@
 #include <iostream>
+#include "param.h"
 #include "yaml_parser.h"
 
-int main()
+int main(int argc, char** argv)
 {
     YamlParser yamlParam_;
     std::string env_cfg_path = param::resolve_config_path(argv[0]);

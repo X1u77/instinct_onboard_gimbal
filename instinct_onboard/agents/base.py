@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import re
 from abc import ABC, abstractmethod
@@ -307,6 +309,7 @@ class ColdStartAgent(OnboardAgent):
         self,
         startup_step_size: float,
         ros_node: RealNode,
+        completion_tolerance: float = None,
         joint_target_pos: np.array = None,
         action_scale: np.array = None,
         action_offset: np.array = None,
@@ -323,6 +326,9 @@ class ColdStartAgent(OnboardAgent):
         """
         self.ros_node = ros_node
         self.startup_step_size = startup_step_size
+        self.completion_tolerance = (
+            float(startup_step_size) if completion_tolerance is None else float(completion_tolerance)
+        )
         self.joint_target_pos = np.zeros(self.ros_node.NUM_JOINTS) if joint_target_pos is None else joint_target_pos
         self._action_scale = (
             np.ones(self.ros_node.NUM_JOINTS, dtype=np.float32) if action_scale is None else action_scale
@@ -332,13 +338,19 @@ class ColdStartAgent(OnboardAgent):
         )
         self._p_gains = np.ones(self.ros_node.NUM_JOINTS, dtype=np.float32) * 10.0 if p_gains is None else p_gains
         self._d_gains = np.zeros(self.ros_node.NUM_JOINTS, dtype=np.float32) if d_gains is None else d_gains
+        # This is a commanded reference, not measured feedback.  Keeping it
+        # separate lets a stalled joint build position error (and therefore
+        # torque) instead of repeatedly commanding only one small step away
+        # from its current measured position.
+        self._command_joint_pos = None
 
     def step(self) -> Tuple[np.ndarray, bool]:
         """Run a single step of the cold start agent. This will turn on the motors to a desired position.
         The desired position is defined in the robot configuration.
         """
-        dof_pos_err = self.joint_target_pos - self.ros_node._get_joint_pos_obs()
-        err_large_mask = np.abs(dof_pos_err) > self.startup_step_size
+        measured_joint_pos = self.ros_node._get_joint_pos_obs()
+        dof_pos_err = self.joint_target_pos - measured_joint_pos
+        err_large_mask = np.abs(dof_pos_err) > self.completion_tolerance
         done = not err_large_mask.any()
         if not done:
             max_err_idx = np.argmax(np.abs(dof_pos_err))
@@ -346,11 +358,17 @@ class ColdStartAgent(OnboardAgent):
                 f"Current ColdStartAgent gets max error {np.round(np.max(np.abs(dof_pos_err)), decimals=3):.3f} at sim joint {max_err_idx:2d}, should be {self.joint_target_pos[max_err_idx]:.3f} but currently is {self.ros_node._get_joint_pos_obs()[max_err_idx]:.3f}",
                 end="\r",
             )
-        dof_pos_target = np.where(
-            err_large_mask,
-            self.ros_node._get_joint_pos_obs() + np.sign(dof_pos_err) * self.startup_step_size,
+        if self._command_joint_pos is None:
+            self._command_joint_pos = measured_joint_pos.copy()
+
+        command_err = self.joint_target_pos - self._command_joint_pos
+        command_large_mask = np.abs(command_err) > self.startup_step_size
+        self._command_joint_pos = np.where(
+            command_large_mask,
+            self._command_joint_pos + np.sign(command_err) * self.startup_step_size,
             self.joint_target_pos,
         )
+        dof_pos_target = self._command_joint_pos
         scale_nonzero = np.abs(self._action_scale) > 1e-8
         actions = np.zeros(self.ros_node.NUM_ACTIONS, dtype=np.float32)
         np.divide(
@@ -363,7 +381,5 @@ class ColdStartAgent(OnboardAgent):
         return actions, done
 
     def reset(self):
-        """Reset the agent. This is a placeholder for any reset logic if needed.
-        Currently, no reset logic is implemented.
-        """
-        pass
+        """Start the next ColdStart ramp from the latest measured posture."""
+        self._command_joint_pos = None
