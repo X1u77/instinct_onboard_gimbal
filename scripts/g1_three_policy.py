@@ -1,3 +1,4 @@
+import argparse
 import queue
 import sys
 import os
@@ -19,12 +20,20 @@ from instinct_onboard.ros_nodes.realsense import UnitreeRsCameraNode
 MAIN_LOOP_FREQUENCY_CHECK_INTERVAL = 500
 
 
+def _parse_speed_scale(value: str) -> float:
+    speed_scale = float(value)
+    if not 0.0 <= speed_scale <= 1.0:
+        raise argparse.ArgumentTypeError("speed scale must be in [0, 1]")
+    return speed_scale
+
+
 class G1ThreePolicyNode(UnitreeRsCameraNode):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.available_agents = dict()
         self.current_agent_name: str | None = None
         self.current_speed_scale = 0.0
+        self.parkour_speed_scale = 0.0
         self.parkour_blend_duration = 0.0
         self._transition_start_time = None
         self._transition_start_joint_pos = None
@@ -137,7 +146,10 @@ class G1ThreePolicyNode(UnitreeRsCameraNode):
             elif done and self.joy_stick_data.A:
                 self._switch_to("walk", "A button pressed, switching to 29dof walk.")
             elif done and self.joy_stick_data.L1:
-                self._set_speed_scale(0.0, "L1 button pressed, resetting parkour speed_scale=0.0.")
+                self._set_speed_scale(
+                    self.parkour_speed_scale,
+                    f"L1 button pressed, resetting parkour speed_scale={self.parkour_speed_scale:.3f}.",
+                )
                 self._switch_to("parkour", "L1 button pressed, switching to 31dof parkour.")
 
         elif self.current_agent_name == "stand":
@@ -147,7 +159,10 @@ class G1ThreePolicyNode(UnitreeRsCameraNode):
             elif self.joy_stick_data.A:
                 self._switch_to("walk", "A button pressed, switching to 29dof walk.")
             elif self.joy_stick_data.L1:
-                self._set_speed_scale(0.0, "L1 button pressed, resetting parkour speed_scale=0.0.")
+                self._set_speed_scale(
+                    self.parkour_speed_scale,
+                    f"L1 button pressed, resetting parkour speed_scale={self.parkour_speed_scale:.3f}.",
+                )
                 self._switch_to("parkour", "L1 button pressed, switching to 31dof parkour.")
 
         elif self.current_agent_name == "walk":
@@ -157,7 +172,10 @@ class G1ThreePolicyNode(UnitreeRsCameraNode):
             elif self.joy_stick_data.A:
                 self._switch_to("walk", "A button pressed, switching to 29dof walk.")
             elif self.joy_stick_data.L1:
-                self._set_speed_scale(0.0, "L1 button pressed, resetting parkour speed_scale=0.0.")
+                self._set_speed_scale(
+                    self.parkour_speed_scale,
+                    f"L1 button pressed, resetting parkour speed_scale={self.parkour_speed_scale:.3f}.",
+                )
                 self._switch_to("parkour", "L1 button pressed, switching to 31dof parkour.")
 
         elif self.current_agent_name == "parkour":
@@ -223,7 +241,7 @@ def main(args):
 
     parkour_signature = inspect.signature(ParkourAgent)
     if "initial_speed_scale" in parkour_signature.parameters:
-        parkour_kwargs["initial_speed_scale"] = 0.0
+        parkour_kwargs["initial_speed_scale"] = args.parkour_speed_scale
     if "debug_policy_io" in parkour_signature.parameters:
         parkour_kwargs["debug_policy_io"] = args.debug_policy_io
     if "freeze_head" in parkour_signature.parameters:
@@ -231,8 +249,9 @@ def main(args):
 
     parkour_agent = ParkourAgent(**parkour_kwargs)
     node.parkour_blend_duration = max(0.0, args.parkour_blend_duration)
+    node.parkour_speed_scale = args.parkour_speed_scale
     if hasattr(parkour_agent, "set_speed_scale"):
-        parkour_agent.set_speed_scale(0.0)
+        parkour_agent.set_speed_scale(args.parkour_speed_scale)
 
     stand_agent = Body29DepthOn31Agent(
         logdir=args.stand_logdir,
@@ -275,8 +294,6 @@ def main(args):
 
 
 if __name__ == "__main__":
-    import argparse
-
     parser = argparse.ArgumentParser(description="G1 deployment node with 29dof stand, 29dof walk and 31dof parkour")
     parser.add_argument("--stand_logdir", type=str, required=True, help="Directory for the 29dof stand agent")
     parser.add_argument("--walk_logdir", type=str, required=True, help="Directory for the 29dof walk agent")
@@ -301,6 +318,12 @@ if __name__ == "__main__":
         type=float,
         default=0.5,
         help="Seconds to blend from the current pose into parkour targets (default: 0.5)",
+    )
+    parser.add_argument(
+        "--parkour_speed_scale",
+        type=_parse_speed_scale,
+        default=0.0,
+        help="Initial/reset normalized parkour speed scale in [0, 1] (default: 0.0)",
     )
     parser.add_argument(
         "--startup_step_size",
